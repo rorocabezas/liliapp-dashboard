@@ -1,0 +1,14 @@
+# Entorno virtual
+venv/
+
+# Credenciales y archivos de entorno
+serviceAccountKey.json
+.env
+
+# Archivos de Python
+__pycache__/
+*.pyc
+
+# Archivos de IDE (VS Code, PyCharm)
+.vscode/
+.idea/
