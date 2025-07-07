@@ -27,7 +27,7 @@ Sigue estos pasos para configurar y ejecutar el proyecto en tu máquina local.
 Abre tu terminal y clona este repositorio:
 
 ```bash
-git clone https://github.com/TU_USUARIO/liliapp-dashboard.git
+git clone https://github.com/rorocabezas/liliapp-dashboard.git
 cd liliapp-dashboard
 ```
 
