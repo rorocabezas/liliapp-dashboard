@@ -1,12 +1,9 @@
-#  Activar el Entorno Virtual
+# Activar el Entorno Virtual
 venv\Scripts\activate
 
 
-# correr FastApi:
+# Correr FastApi:
 uvicorn backend.main:app --reload
-uvicorn main:app --reload
-
 
 # Correr Streamlit:
-streamlit run app.py
-streamlit run frontend/app.py
+streamlit run dashboard/app.py
