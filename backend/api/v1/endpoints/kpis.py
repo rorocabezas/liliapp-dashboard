@@ -19,10 +19,8 @@ def get_average_order_value():
 @router.get("/valid-users-data")
 def list_valid_users():
     """
-    Obtiene una lista completa (sin paginación) de los usuarios válidos
-    con los campos: accountHolderName, rut, role, email.
-    
-    ADVERTENCIA: Puede ser lento si hay muchos miles de usuarios válidos.
+    Obtiene los datos de los primeros 50 usuarios con validUser = true.
+    La consulta está limitada a 50 resultados para proteger el rendimiento.
     """
     users = get_valid_users_data()
     return {"users": users}

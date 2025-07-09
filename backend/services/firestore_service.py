@@ -16,7 +16,6 @@ def get_valid_users_data() -> List[Dict[str, Any]]:
     # 1. Crea una consulta para filtrar por validUser == True
     query = users_ref.where('validUser', '==', True)
 
-    # --- ¡AÑADE ESTA LÍNEA! ---
     # 2. Limita el número de documentos a devolver a 50
     query = query.limit(50)
     # ---------------------------
