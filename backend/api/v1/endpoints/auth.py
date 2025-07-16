@@ -1,9 +1,13 @@
 # backend/api/v1/endpoints/auth.py
-
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from firebase_admin import auth
+from backend.services import firestore_service
 import firebase_admin
+
+
+
+from backend.services import firestore_service
 
 router = APIRouter()
 
@@ -29,32 +33,20 @@ async def login_for_access_token(user_credentials: UserLogin):
     email = user_credentials.email
     password = user_credentials.password
 
-    try:
-        # 1. Busca al usuario por su email
-        user = auth.get_user_by_email(email)
-        
-        # 2. Firebase Admin SDK no puede verificar contraseñas directamente.
-        #    La verificación debe hacerse en el cliente o mediante un truco.
-        #    El método más seguro es crear un CUSTOM TOKEN que el cliente
-        #    puede usar para iniciar sesión y obtener un ID TOKEN.
-        #    Esto es seguro porque solo tu backend (con credenciales de admin) puede crearlo.
+    try:        
+        user = auth.get_user_by_email(user_credentials.email)
+        user_role = firestore_service.get_user_role(user.uid)
 
-        # 3. Creamos un custom token para este usuario.
         custom_token = auth.create_custom_token(user.uid)
 
         # Devolvemos el token al frontend
-        return {"custom_token": custom_token.decode('utf-8'), "uid": user.uid}
-
-    except auth.UserNotFoundError:
-        raise HTTPException(
-            status_code=404,
-            detail="Usuario no encontrado.",
-        )
+        return {
+            "custom_token": custom_token.decode('utf-8'), 
+            "uid": user.uid,
+            "role": user_role,
+            "email": user.email # También devolvemos el email para mostrarlo
+        }
     except Exception as e:
-        # ¡Importante! No reveles el error de contraseña incorrecta por seguridad.
-        # Los ataques de enumeración de usuarios se basan en esto.
-        # Siempre devuelve un mensaje genérico.
-        print(f"Error de autenticación: {e}") # Para tu log
         raise HTTPException(
             status_code=401,
             detail="Credenciales inválidas.",

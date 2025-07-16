@@ -1,21 +1,25 @@
 # dashboard/app.py
 
 import streamlit as st
-import requests
+from pathlib import Path
+import sys
+
+project_root = Path(__file__).resolve().parent.parent
+if str(project_root) not in sys.path:
+    sys.path.append(str(project_root))
+
+from dashboard.auth import check_login
+from dashboard.menu import render_menu
 import pandas as pd
 import plotly.express as px
 from datetime import datetime, timedelta
-from auth import check_login
 import os
 
 st.set_page_config(page_title="Dashboard LiliApp", layout="wide")
 
-# --- 1. VERIFICACIÓN DE LOGIN ---
-# Esta línea protege toda la página. Si no está logueado, se detiene aquí.
 check_login()
+render_menu() 
 
-# --- 2. LAYOUT DEL SIDEBAR (BARRA LATERAL) ---
-# Aquí pondremos los filtros y el botón de logout.
 with st.sidebar:
     try:
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -28,7 +32,7 @@ with st.sidebar:
     st.markdown("---")
     
     # Filtro de fecha
-    st.header("Filtros")
+    st.header("Filtros Disponibles")
     today = datetime.now()
     date_range = st.date_input(
         "Selecciona un rango de fechas",
@@ -36,14 +40,9 @@ with st.sidebar:
         format="DD/MM/YYYY"
     )
 
-    st.markdown("---")
-    if st.button("Cerrar Sesión"):
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
-        st.rerun()
+    
 
-# --- 3. FUNCIÓN PARA CARGAR DATOS (CON CACHÉ) ---
-# Usamos el decorador de caché de Streamlit para evitar llamar a la API repetidamente.
+
 @st.cache_data
 def load_main_kpis(start_date, end_date):
     """
@@ -51,18 +50,11 @@ def load_main_kpis(start_date, end_date):
     En el futuro, esto podría ser un único endpoint para eficiencia.
     """
     api_url = "http://127.0.0.1:8000"
-    
-    # Convertimos las fechas a string en formato ISO para la API
+
     start_str = start_date.isoformat()
     end_str = end_date.isoformat()
     
-    # Aquí irían las llamadas a tu API. Por ahora, usamos datos de ejemplo.
-    # response_kpis = requests.get(f"{api_url}/api/v1/kpis/summary?start_date={start_str}&end_date={end_str}")
-    # if response_kpis.status_code == 200:
-    #     return response_kpis.json()
-    
-    # --- Datos de Ejemplo (MOCK) ---
-    # Reemplaza esto con la llamada real a tu API cuando esté lista.
+
     mock_data = {
         "new_users": 1250,
         "aov_clp": 58700,

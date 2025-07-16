@@ -7,3 +7,6 @@ uvicorn backend.main:app --reload
 
 # Correr Streamlit:
 streamlit run dashboard/app.py
+
+usuario: admin1@gmail.com
+pass: 123456
