@@ -1,76 +1,87 @@
-# dashboard/pages/1_📈_Adquisición_y_Crecimiento.py
+# dashboard/pages/adquisicion.py
+
+# --- Importaciones de la librería estándar ---
 import sys
 from pathlib import Path
 
-project_root = Path(__file__).resolve().parent.parent
+# --- Importaciones de terceros ---
+import streamlit as st
+import pandas as pd
+import requests
+import plotly.express as px
+
+# --- Patrón de importación para encontrar módulos locales ---
+project_root = Path(__file__).resolve().parents[2]
 if str(project_root) not in sys.path:
     sys.path.append(str(project_root))
 
-import streamlit as st
+# --- Importaciones de nuestro propio proyecto ---
 from dashboard.auth import check_login
 from dashboard.menu import render_menu
-import plotly.express as px
-import pandas as pd
-from dashboard.auth import check_login
 
-
-
+# --- Configuración de Página y Autenticación ---
 st.set_page_config(page_title="Adquisición - LiliApp", layout="wide")
 check_login() # Protege la página
 render_menu() # Renderiza el menú
 
-# --- Función de Carga de Datos ---
-@st.cache_data(ttl=600)
-def load_data(start_date, end_date):
-    # En un futuro, llamarías al endpoint /acquisition
-    # Por ahora, usamos datos de ejemplo
-    mock_data = {
-        "new_users": 1345,
-        "onboarding_rate": 78.2,
-        "acquisition_channels": {"Google Ads": 550, "Referidos": 400, "Facebook": 395},
-        "rut_validation_rate": 62.1
-    }
-    return mock_data
+
+# --- Función para Cargar Datos desde la API ---
+@st.cache_data(ttl=3600) # El caché dura 1 hora
+def load_acquisition_data(start_date, end_date):
+    """Llama al endpoint /acquisition de la API para obtener los datos."""
+    api_url = "http://127.0.0.1:8000/api/v1/kpis/acquisition"
+    params = {"start_date": start_date, "end_date": end_date}
+    try:
+        response = requests.get(api_url, params=params)
+        response.raise_for_status() # Lanza un error para códigos 4xx/5xx
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"Error al conectar con la API: {e}")
+        return None
 
 
-# --- Título y Filtros ---
+# --- Cuerpo del Dashboard - Título ---
 st.title("📈 Adquisición y Crecimiento")
-st.subheader("Nuevos Usuarios y Activación")
 st.markdown("Análisis del flujo de nuevos usuarios y su activación en la plataforma.")
 
-# Reutilizamos el filtro de fecha de la página principal
-if 'date_range' in st.session_state:
-    start_date, end_date = st.session_state['date_range']
-    data = load_data(start_date, end_date)
 
-    if data:
-        # --- KPIs Principales ---
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Nuevos Usuarios", f"{data['new_users']:,}")
-        col2.metric("Tasa de Onboarding", f"{data['onboarding_rate']}%")
-        col3.metric("Tasa de Validación RUT", f"{data['rut_validation_rate']}%")
+# --- Gráficos y Tablas ---
+# Como menu.py garantiza que date_range siempre existe, podemos usarlo directamente.
+start_date, end_date = st.session_state['date_range']
 
-        st.markdown("---")
+with st.spinner("Cargando datos de adquisición..."):
+    data = load_acquisition_data(start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
 
-        # --- Visualizaciones ---
+if data:
+    # --- KPIs Principales en Columnas ---
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Nuevos Usuarios", f"{data.get('new_users_count', 0):,}")
+    col2.metric("Tasa de Onboarding", f"{data.get('onboarding_rate', 0)}%")
+    col3.metric("Tasa de Validación RUT", f"{data.get('rut_validation_rate', 0)}%")
+
+    st.markdown("---")
+
+    # --- Gráficos en Columnas ---
+    col_graf_1, col_graf_2 = st.columns(2)
+
+    with col_graf_1:
         st.subheader("Canales de Adquisición")
-        
-        channels_df = pd.DataFrame(
-            list(data['acquisition_channels'].items()), 
-            columns=['Canal', 'Nuevos Usuarios']
-        )
-        
-        fig = px.bar(
-            channels_df, 
-            x='Canal', 
-            y='Nuevos Usuarios', 
-            title='Distribución de Nuevos Usuarios por Canal',
-            text_auto=True
-        )
-        fig.update_traces(marker_color='#6d28d9')
-        st.plotly_chart(fig, use_container_width=True)
+        channel_data = data.get('channel_distribution', {})
+        if channel_data:  # <-- Verificación específica para este gráfico
+            df_channels = pd.DataFrame(list(channel_data.items()), columns=['Canal', 'Usuarios'])
+            fig_bar = px.bar(df_channels, x='Usuarios', y='Canal', orientation='h', text_auto=True)
+            st.plotly_chart(fig_bar, use_container_width=True)
+        else:
+            st.info("No hay datos de canales de adquisición para mostrar en este período.")
 
-    else:
-        st.warning("No se pudieron cargar los datos.")
+    with col_graf_2:
+        st.subheader("Registros por Región")
+        region_data = data.get('region_distribution', {})
+        if region_data:  # <-- Verificación específica para este gráfico
+            df_regions = pd.DataFrame(list(region_data.items()), columns=['Región', 'Usuarios'])
+            fig_pie = px.pie(df_regions, names='Región', values='Usuarios', hole=0.4)
+            st.plotly_chart(fig_pie, use_container_width=True)
+        else:
+            st.info("No hay datos de registros por región para mostrar en este período.")
 else:
-    st.warning("Por favor, selecciona un rango de fechas en la página principal.")
+    st.error("No se pudieron cargar los datos desde la API. Revisa la conexión con el backend.")

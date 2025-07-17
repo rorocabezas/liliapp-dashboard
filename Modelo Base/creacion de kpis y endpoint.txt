@@ -1,0 +1,58 @@
+
+página de "Adquisición" necesitamos:
+
+Nuevos Usuarios (un número).
+Tasa de Onboarding (un porcentaje).
+Tasa de Validación RUT (un porcentaje).
+Distribución de Canales de Adquisición (un gráfico de barras).
+Distribución de Registros por Región (un gráfico de tarta o mapa).
+
+backend de "Adquisición" necesitamos:
+def get_acquisition_kpis
+
+página de "Engagement y Conversión" necesitamos:
+
+Tasa de Abandono de Carrito (un porcentaje).
+Ticket Promedio (AOV) (un valor en CLP).
+Frecuencia de Compra (un número, ej: 1.8).
+Conversión por Servicio (un gráfico de barras mostrando los servicios más vendidos).
+Métodos de Pago Populares (un gráfico de tarta o donut).
+
+backend de "Engagement y Conversión" necesitamos:
+
+def get_engagement_kpis
+def get_cart_abandonment_rate
+
+
+página de "Operaciones y Calidad" necesitamos:
+
+Tiempo Promedio del Ciclo de Servicio (de pagado a completado).
+Tasa de Cancelación.
+Distribución de Órdenes por Comuna (un gráfico de barras).
+Distribución de Órdenes por Hora del Día (un gráfico de líneas para ver las horas pico).
+Satisfacción Promedio (Rating).
+
+backend de "Operaciones y Calidad" necesitamos:
+
+def get_operations_kpis
+
+página de "Retención y Lealtad" necesitamos:
+
+Tasa de Recompra (el porcentaje de clientes que ha comprado más de una vez).
+Valor de Vida del Cliente (LTV) (el gasto promedio por cliente en su historia).
+Usuarios Activos Mensuales (MAU) (un indicador de la salud general de la plataforma).
+Análisis de Cohortes de Retención (un mapa de calor que muestra qué porcentaje de usuarios nuevos de un mes específico vuelve a comprar en los meses siguientes).
+
+backend de "Retención y Lealtad" necesitamos:
+
+def get_retention_kpis
+
+página de "Segmentación y Marketing" necesitamos:
+
+Calcular los valores RFM para cada cliente.
+Asignar a cada cliente un segmento (ej: "Campeones", "En Riesgo", "Nuevos").
+Visualizar la distribución de clientes en estos segmentos (un gráfico de barras o treemap).
+Mostrar una tabla de ejemplo con clientes de un segmento específico para que el equipo de marketing pueda tomar acción (ej: exportar la lista).
+
+backend de "Segmentación y Marketing" necesitamos:
+def get_rfm_segmentation

@@ -1,5 +1,6 @@
 # dashboard/menu.py
 import streamlit as st
+from datetime import datetime, timedelta
 
 # Definimos los roles para mantener el código limpio y legible
 ADMIN_ROLE = "admin"
@@ -35,7 +36,7 @@ def render_menu():
 
         # --- NAVEGACIÓN PRINCIPAL (Común para todos) ---
         st.page_link("app.py", label="Página Principal", icon="🏠")
-        
+        st.markdown("---")
         st.subheader("Análisis de Negocio")
         st.page_link("pages/adquisicion.py", label="Adquisición", icon="📈")
         st.page_link("pages/engagement.py", label="Conversión", icon="🛒")
@@ -43,6 +44,25 @@ def render_menu():
         st.page_link("pages/retencion.py", label="Retención", icon="💖")
         st.page_link("pages/segmentacion.py", label="Segmentación", icon="🎯")
        
+        # --- Filtros Globales ---
+        st.markdown("---")
+        st.header("Filtros Globales")
+
+        # Si el rango de fechas no existe en la sesión, lo inicializamos
+        if 'date_range' not in st.session_state:
+            today = datetime.now()
+            st.session_state['date_range'] = (today - timedelta(days=30), today)
+
+        # Creamos el widget y lo vinculamos a la variable de sesión
+        date_range_tuple = st.date_input(
+            "Selecciona un rango de fechas",
+            value=st.session_state['date_range'],
+            format="DD/MM/YYYY"
+        )
+
+        # Actualizamos la sesión si el usuario cambia las fechas
+        if len(date_range_tuple) == 2:
+            st.session_state['date_range'] = date_range_tuple
 
         # --- SECCIÓN DE ADMINISTRACIÓN (SOLO para Admins) ---
         if user_role == ADMIN_ROLE:

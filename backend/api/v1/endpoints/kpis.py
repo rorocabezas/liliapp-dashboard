@@ -1,76 +1,95 @@
 # backend/api/v1/endpoints/kpis.py
-from fastapi import APIRouter, HTTPException, Query
-from datetime import date, datetime 
-from backend.services import firestore_service 
-from backend.services.firestore_service import  calculate_average_order_value, get_valid_users_data
-
+from fastapi import APIRouter, HTTPException
+from datetime import date, datetime
+from backend.services import firestore_service
 
 router = APIRouter()
 
-def get_db_client():
-    """
-    Función para obtener el cliente de Firestore.
-    Esto asegura que firestore.client() solo se llame DESPUÉS
-    de que firebase_admin.initialize_app() se haya ejecutado.
-    """
-    return firestore.client()
+# ===================================================================
+# ===               ENDPOINTS PARA EL DASHBOARD                   ===
+# ===================================================================
 
-@router.get("/summary", summary="Obtiene KPIs para el resumen ejecutivo")
+@router.get("/summary", summary="KPIs para Resumen Ejecutivo", tags=["Dashboard Pages"])
 def get_summary_kpis_endpoint(start_date: date, end_date: date):
-    """
-    Endpoint para obtener el resumen de KPIs para la página principal.
-    Recibe un rango de fechas como parámetros de consulta.
-    """
+    """Obtiene el resumen de KPIs para la página principal."""
     try:
         start_datetime = datetime.combine(start_date, datetime.min.time())
         end_datetime = datetime.combine(end_date, datetime.max.time())
-        
-        kpis = firestore_service.get_summary_kpis(start_datetime, end_datetime)
-        return kpis
+        return firestore_service.get_summary_kpis(start_datetime, end_datetime)
     except Exception as e:
-        print(f"Error en el endpoint /summary: {e}")
-        raise HTTPException(status_code=500, detail=f"Error interno del servidor: {e}")
+        print(f"Error en endpoint /summary: {e}")
+        raise HTTPException(status_code=500, detail="Error interno del servidor al procesar KPIs de resumen.")
 
-
-@router.get("/average-order-value", summary="Calcula el Ticket Promedio (AOV)")
-def get_average_order_value_endpoint():
-    """
-    Obtiene el ticket promedio (AOV) de todas las órdenes completadas.
-    """
-    try:
-        aov = firestore_service.calculate_average_order_value()
-        return {"average_order_value": round(aov, 2), "currency": "CLP"}
-    except Exception as e:
-        print(f"Error en el endpoint /average-order-value: {e}")
-        raise HTTPException(status_code=500, detail=f"Error interno del servidor: {e}")
-
-
-@router.get("/valid-users-data", summary="Obtiene una lista de usuarios válidos")
-def list_valid_users_endpoint():
-    """
-    Obtiene los datos de los primeros 50 usuarios con validUser = true.
-    """
-    try:
-        users = firestore_service.get_valid_users_data()
-        return {"count": len(users), "users": users}
-    except Exception as e:
-        print(f"Error en el endpoint /valid-users-data: {e}")
-        raise HTTPException(status_code=500, detail=f"Error interno del servidor: {e}")
-
-# Este endpoint ya no es necesario si no lo usas, pero lo dejo por si acaso.
-@router.get("/new-users", deprecated=True)
-def get_new_users_deprecated():
-    return {"message": "Este endpoint está obsoleto. Usa /summary."}
-
-
-@router.get("/acquisition", summary="KPIs de Adquisición y Crecimiento")
+# --- funcion para pagina de Adquisición y Crecimiento ---
+@router.get("/acquisition", summary="KPIs de Adquisición", tags=["Dashboard Pages"])
 def get_acquisition_kpis_endpoint(start_date: date, end_date: date):
-    # Llama a la función del servicio y devuelve los datos
-    # ... (implementación similar al endpoint /summary)
-    return {"message": "Datos de adquisición aquí"}
+    """Obtiene todos los KPIs para la página de Adquisición."""
+    try:
+        start_datetime = datetime.combine(start_date, datetime.min.time())
+        end_datetime = datetime.combine(end_date, datetime.max.time())
+        data = firestore_service.get_acquisition_kpis(start_datetime, end_datetime)
+        data['onboarding_rate'] = round(data.get('onboarding_rate', 0), 2)
+        data['rut_validation_rate'] = round(data.get('rut_validation_rate', 0), 2)
+        return data
+    except Exception as e:
+        print(f"Error en endpoint /acquisition: {e}")
+        raise HTTPException(status_code=500, detail="Error interno del servidor al procesar KPIs de adquisición.")
+    
+# --- funcion para pagina de Engagement y Conversión ---
+@router.get("/engagement", summary="KPIs de Engagement", tags=["Dashboard Pages"])
+def get_engagement_kpis_endpoint(start_date: date, end_date: date):
+    """Obtiene todos los KPIs para la página de Engagement y Conversión."""
+    try:
+        start_datetime = datetime.combine(start_date, datetime.min.time())
+        end_datetime = datetime.combine(end_date, datetime.max.time())
+        data = firestore_service.get_engagement_kpis(start_datetime, end_datetime)
+        data['aov_clp'] = round(data.get('aov_clp', 0))
+        data['purchase_frequency'] = round(data.get('purchase_frequency', 0), 2)
+        data['abandonment_rate'] = round(data.get('abandonment_rate', 0), 2)
+        return data
+    except Exception as e:
+        print(f"Error en endpoint /engagement: {e}")
+        raise HTTPException(status_code=500, detail="Error interno del servidor al procesar KPIs de engagement.")
+    
 
-@router.get("/conversion", summary="KPIs de Engagement y Conversión")
-def get_conversion_kpis_endpoint(start_date: date, end_date: date):
-    # Llama a la función del servicio y devuelve los datos
-    # ...
-    return {"message": "Datos de conversión aquí"}
+# --- funcion para pagina de Operaciones y Calidad ---
+@router.get("/operations", summary="KPIs de Operaciones", tags=["Dashboard Pages"])
+def get_operations_kpis_endpoint(start_date: date, end_date: date):
+    """Obtiene todos los KPIs para la página de Operaciones."""
+    try:
+        start_datetime = datetime.combine(start_date, datetime.min.time())
+        end_datetime = datetime.combine(end_date, datetime.max.time())
+        data = firestore_service.get_operations_kpis(start_datetime, end_datetime)
+        data['cancellation_rate'] = round(data.get('cancellation_rate', 0), 2)
+        data['avg_cycle_time_days'] = round(data.get('avg_cycle_time_days', 0), 1)
+        data['avg_rating'] = round(data.get('avg_rating', 0), 2)
+        return data
+    except Exception as e:
+        print(f"Error en endpoint /operations: {e}")
+        raise HTTPException(status_code=500, detail="Error interno del servidor al procesar KPIs de operaciones.")
+    
+# --- funcion para pagina de Retención y Lealtad ---
+@router.get("/retention", summary="KPIs de Retención", tags=["Dashboard Pages"])
+def get_retention_kpis_endpoint(end_date: date):
+    """Obtiene todos los KPIs para la página de Retención."""
+    try:
+        end_datetime = datetime.combine(end_date, datetime.max.time())
+        data = firestore_service.get_retention_kpis(end_datetime)
+        data['ltv_clp'] = round(data.get('ltv_clp', 0))
+        data['repurchase_rate'] = round(data.get('repurchase_rate', 0), 2)
+        return data
+    except Exception as e:
+        print(f"Error en endpoint /retention: {e}")
+        raise HTTPException(status_code=500, detail="Error interno del servidor al procesar KPIs de retención.")
+    
+
+# --- funcion para pagina de Segmentación y Marketing ---
+@router.get("/segmentation", summary="Segmentación de Clientes (RFM)", tags=["Dashboard Pages"])
+def get_rfm_segmentation_endpoint(end_date: date):
+    """Obtiene la distribución de clientes por segmento RFM."""
+    try:
+        end_datetime = datetime.combine(end_date, datetime.max.time())
+        return firestore_service.get_rfm_segmentation(end_datetime)
+    except Exception as e:
+        print(f"Error en endpoint /segmentation: {e}")
+        raise HTTPException(status_code=500, detail="Error interno del servidor al procesar segmentación RFM.")
