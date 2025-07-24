@@ -40,7 +40,9 @@ idna==3.10
 Jinja2==3.1.6
 jsonschema==4.24.0
 jsonschema-specifications==2025.4.1
+markdown-it-py==3.0.0
 MarkupSafe==3.0.2
+mdurl==0.1.2
 msgpack==1.1.1
 narwhals==1.45.0
 numpy==2.3.1
@@ -58,6 +60,7 @@ pydantic==2.11.7
 pydantic-settings==2.10.1
 pydantic_core==2.33.2
 pydeck==0.9.1
+Pygments==2.19.2
 PyJWT==2.10.1
 pyparsing==3.2.3
 python-dateutil==2.9.0.post0
@@ -67,6 +70,7 @@ pytz==2025.2
 PyYAML==6.0.2
 referencing==0.36.2
 requests==2.32.4
+rich==14.0.0
 rpds-py==0.26.0
 rsa==4.9.1
 six==1.17.0

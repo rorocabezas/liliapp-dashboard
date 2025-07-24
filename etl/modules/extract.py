@@ -2,28 +2,29 @@
 
 import json
 from typing import List, Dict, Any
+import streamlit as st
 
-def load_orders_from_json(filepath: str) -> List[Dict[str, Any]]:
+def load_data_from_json(filepath: str, data_key: str, logger=st.info) -> List[Dict[str, Any]]:
     """
-    Carga las órdenes desde un archivo JSON de Jumpseller.
-    El formato esperado es una lista de objetos {"order": {...}}.
+    Función genérica para cargar datos desde un archivo JSON de Jumpseller.
     
+    Args:
+        filepath (str): La ruta al archivo JSON.
+        data_key (str): La clave principal que envuelve cada objeto (ej: "order", "product").
+        logger: El logger de Streamlit para reportar progreso.
+        
     Returns:
-        Una lista de diccionarios, donde cada diccionario es una orden.
+        Una lista de diccionarios con los datos extraídos.
     """
-    print(f"📄 Extrayendo datos desde: {filepath}")
+    logger(f"📄 Extrayendo datos desde: {filepath}...")
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             raw_data = json.load(f)
         
-        # El JSON de Jumpseller es una lista de {"order": ...}, extraemos el contenido.
-        orders = [item['order'] for item in raw_data if 'order' in item]
+        items = [item[data_key] for item in raw_data if data_key in item]
         
-        print(f"✅ Extracción completada. Se encontraron {len(orders)} órdenes.")
-        return orders
-    except FileNotFoundError:
-        print(f"❌ ERROR: El archivo no fue encontrado en '{filepath}'")
-        return []
+        logger(f"✅ Extracción completada. Se encontraron {len(items)} '{data_key}'(s).")
+        return items
     except Exception as e:
-        print(f"❌ ERROR durante la extracción: {e}")
+        st.error(f"❌ ERROR durante la extracción de '{data_key}': {e}")
         return []

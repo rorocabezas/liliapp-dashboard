@@ -43,6 +43,7 @@ def render_menu():
         st.page_link("pages/operaciones.py", label="Operaciones", icon="⚙️")
         st.page_link("pages/retencion.py", label="Retención", icon="💖")
         st.page_link("pages/segmentacion.py", label="Segmentación", icon="🎯")
+        st.page_link("pages/cargas.py", label="ETL", icon="⚙️")
        
         # --- Filtros Globales ---
         st.markdown("---")
