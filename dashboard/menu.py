@@ -43,8 +43,12 @@ def render_menu():
         st.page_link("pages/operaciones.py", label="Operaciones", icon="⚙️")
         st.page_link("pages/retencion.py", label="Retención", icon="💖")
         st.page_link("pages/segmentacion.py", label="Segmentación", icon="🎯")
-        st.page_link("pages/cargas.py", label="ETL", icon="⚙️")
-        st.page_link("pages/98_🛠️_Mapeo_de_Productos.py", label="revision", icon="⚙️")
+        st.markdown("---")
+        st.subheader("Cargas de Datos ETL")
+        st.page_link("pages/cargas.py", label="ETL Masivo", icon="⚙️")
+        st.page_link("pages/Mapeo_de_datos.py", label="Mapeo de Servicios", icon="🛠️")
+        st.page_link("pages/Mapeo_de_ordenes.py", label="Mapeo de Ordenes", icon="🔄")
+        
         
        
         # --- Filtros Globales ---

@@ -110,3 +110,77 @@ def load_variants_to_firestore(variants: List[Dict[str, Any]], logger=st.info):
         progress_bar.progress((i + 1) / total_items, text=f"Procesando 'variantes'... {i+1}/{total_items}")
     
     st.success(f"Resumen de Carga para 'variantes': {total_items} documentos procesados.")
+
+
+def load_subcategories_to_firestore(subcategories: List[Dict[str, Any]], logger=st.info):
+    """
+    Función especializada para cargar subcategorías a sus respectivas subcolecciones en 'services'.
+    """
+    logger("📤 Iniciando carga de Subcategorías a subcolecciones...")
+    if not subcategories:
+        logger("  ⚠️ No hay subcategorías para cargar. Saltando proceso.")
+        return
+        
+    db = firestore.client()
+    
+    df = pd.DataFrame(subcategories)
+    grouped_subcategories = df.groupby('serviceId')
+    
+    progress_bar = st.progress(0, text="Procesando lotes para 'subcategorías'...")
+    total_groups = len(grouped_subcategories)
+
+    for i, (service_id, group) in enumerate(grouped_subcategories):
+        service_ref = db.collection('services').document(service_id)
+        subcategories_ref = service_ref.collection('subcategories') # <-- Nombre de la subcolección
+        
+        batch = db.batch()
+        for _, subcategory_row in group.iterrows():
+            subcategory_data = subcategory_row.to_dict()
+            subcategory_id = subcategory_data.pop('id')
+            subcategory_data.pop('serviceId')
+            
+            doc_ref = subcategories_ref.document(subcategory_id)
+            batch.set(doc_ref, subcategory_data, merge=True)
+        
+        batch.commit()
+        progress_bar.progress((i + 1) / total_groups, text=f"Cargando subcategorías para servicio {service_id}...")
+
+    st.success(f"Resumen de Carga para 'subcategorías': {len(subcategories)} documentos procesados.")
+
+def load_customer_profiles(profiles: List[Dict[str, Any]], logger=st.info):
+    """Carga los perfiles de cliente a su subcolección 'customer_profiles'."""
+    logger("📤 Iniciando carga de Perfiles de Cliente a subcolecciones...")
+    if not profiles:
+        logger("  ⚠️ No hay perfiles para cargar.")
+        return
+        
+    db = firestore.client()
+    batch = db.batch()
+    
+    for profile_data in profiles:
+        user_id = profile_data.pop('id')
+        doc_ref = db.collection('users').document(user_id).collection('customer_profiles').document('main') # Usamos 'main' como ID fijo
+        batch.set(doc_ref, profile_data, merge=True)
+    
+    batch.commit()
+    logger(f"✅ Carga de {len(profiles)} perfiles de cliente completada.")
+
+
+def load_addresses(addresses: List[Dict[str, Any]], logger=st.info):
+    """Carga las direcciones a su subcolección 'addresses'."""
+    logger("📤 Iniciando carga de Direcciones a subcolecciones...")
+    if not addresses:
+        logger("  ⚠️ No hay direcciones para cargar.")
+        return
+        
+    db = firestore.client()
+    batch = db.batch()
+    
+    for address_data in addresses:
+        customer_id = address_data.pop('customerId')
+        address_id = address_data.pop('id')
+        doc_ref = db.collection('users').document(customer_id).collection('customer_profiles').document('main').collection('addresses').document(address_id)
+        batch.set(doc_ref, address_data, merge=True)
+        
+    batch.commit()
+    logger(f"✅ Carga de {len(addresses)} direcciones completada.")

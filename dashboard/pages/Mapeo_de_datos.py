@@ -1,4 +1,4 @@
-# dashboard/pages/98_🛠️_Mapeo_de_Productos.py
+# dashboard/pages/Mapeo_de_datos.py
 
 import streamlit as st
 import sys
@@ -12,7 +12,7 @@ if str(project_root) not in sys.path:
 
 from dashboard.auth import check_login
 from dashboard.menu import render_menu
-from etl.modules.transform import transform_single_product # Importamos la función actualizada
+from etl.modules.transform import transform_single_product
 
 # --- Configuración de Página y Autenticación ---
 st.set_page_config(page_title="Mapeo de Productos - LiliApp", layout="wide")
@@ -34,7 +34,7 @@ def load_source_products():
         return {}
 
 # --- Cuerpo del Dashboard ---
-st.title("🛠️ Herramienta de Mapeo de Productos (ETL)")
+st.title("🛠️ Herramienta de Mapeo de Servicios (ETL)")
 st.markdown("Usa esta herramienta para seleccionar un producto de Jumpseller, ver su transformación y validar los campos contra el esquema de Firestore.")
 
 all_products = load_source_products()
@@ -54,8 +54,9 @@ selected_product_id = st.selectbox(
 if selected_product_id:
     source_product = all_products[selected_product_id]
     
-    ## REF: La función de transformación ahora devuelve TRES valores.
-    transformed_service, transformed_category, transformed_variants = transform_single_product(source_product)
+    # --- LA CORRECCIÓN ESTÁ AQUÍ ---
+    # Ahora esperamos y recibimos CUATRO valores de la función
+    transformed_service, transformed_category, transformed_variants, transformed_subcategories = transform_single_product(source_product)
     
     st.markdown("---")
     st.subheader("2. Visualiza la Transformación")
@@ -85,10 +86,16 @@ if selected_product_id:
         st.write("➡️ **Colección `services`**")
         st.json(transformed_service)
         
-        st.write("➡️ **Colección `categories`**")
+        st.write("➡️ **Colección `categories` (Categoría Principal)**")
         st.json(transformed_category)
 
-        ## REF: Añadimos una sección para mostrar las variantes transformadas.
+        # --- SECCIÓN AÑADIDA PARA MOSTRAR SUBCATEGORÍAS ---
+        st.write("➡️ **Subcolección `subcategories`**")
+        if transformed_subcategories:
+            st.json(transformed_subcategories)
+        else:
+            st.info("Este producto no tiene subcategorías definidas.")
+
         st.write("➡️ **Subcolección `variants`**")
         if transformed_variants:
             st.json(transformed_variants)
@@ -100,28 +107,21 @@ if selected_product_id:
     # --- 3. Análisis de Campos Faltantes ---
     st.subheader("3. Análisis de Campos y Siguientes Pasos")
     
-    ## REF: Actualizamos el esquema ideal para incluir los nuevos campos.
+    # Se añade 'hasSubcategories' al esquema ideal para validación
     ideal_service_schema = {
         "id", "name", "description", "categoryId", "price", "discount", 
-        "stats", "status", "createdAt", "hasVariants"
+        "stats", "status", "createdAt", "hasVariants", "hasSubcategories"
     }
     
     if transformed_service:
         transformed_keys = set(transformed_service.keys())
         missing_keys = ideal_service_schema - transformed_keys
         
-        st.write("Comparando los datos transformados con el esquema ideal de la colección `services`:")
+        st.write("Comparando con el esquema ideal de la colección `services`:")
         if missing_keys:
             st.warning(f"**Campos Faltantes:** `{', '.join(missing_keys)}`")
-            st.info(
-                "Estos campos no se encontraron en el JSON de origen. "
-                "Para `stats`, es correcto inicializarlos en cero. "
-                "Para otros, considera si puedes derivarlos de otros campos en `transform.py`."
-            )
+            st.info("Estos campos no se encontraron o no se generaron en la transformación.")
         else:
             st.success("¡Excelente! Todos los campos del esquema `services` están presentes.")
             
-    st.markdown(
-        "**Recomendación:** Revisa la transformación. Si estás satisfecho, "
-        "puedes usar el **Panel ETL** en el menú para ejecutar la carga masiva."
-    )
+    st.markdown("**Recomendación:** Si la transformación es correcta, usa el **Panel ETL** para la carga masiva.")

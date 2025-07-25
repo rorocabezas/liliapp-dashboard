@@ -430,12 +430,13 @@ interface Service {
   id: string;
   name: string;
   description: string;
-  categoryId: string; // Relación con categorías
+  categoryId: string; // Relación con la categoría PRINCIPAL
   
-    // --- CAMBIOS PARA INTEGRAR VARIANTES ---
-  hasVariants: boolean; // true si existe la subcolección 'variants', false si no.
-  price: number;        // Ahora representa el precio BASE o "Desde". El precio final está en la variante.
-    // ------------------------------------
+    // --- CAMBIOS PARA INTEGRAR SUBCOLECCIONES ---
+  hasVariants: boolean;        // true si existe la subcolección 'variants'
+  hasSubcategories: boolean;   // true si existe la subcolección 'subcategories'
+  price: number;               // Ahora representa el precio BASE o "Desde".
+  // ------------------------------------------
   
 
   discount?: number; // Descuento en CLP
@@ -451,21 +452,29 @@ interface Service {
   createdAt: Timestamp; // Para análisis temporales
 }
 ```
+#### 🛠️ Subcolección `subcategories` (dentro de services/{serviceId})  
+```typescript
+// Ruta: services/{serviceId}/subcategories/{subcategoryId}
+interface Subcategory {
+  id: string;   // El ID de la categoría de Jumpseller
+  name: string; // ej: "Calefont", "Cocina", "Reparaciones Menores"
+}
+
+```
 
 #### 🛠️ Subcolección `variants` (dentro de services/{serviceId})  
 ```typescript
-// services/{serviceId}/variants/{variantId}
+// Ruta: services/{serviceId}/variants/{variantId}
 interface Variant {
   id: string; // El ID de la variante de Jumpseller
-  price: number; // <-- El precio REAL que se añade al carrito.
+  price: number; // <-- El precio REAL y final que se añade al carrito.
   options: {
     name: string;  // ej: "¿Qué problema tiene?"
     value: string; // ej: "No se llena el estanque"
   };
   sku?: string;
-  stock?: number;// Otros campos de Jumpseller si los necesitas (sku, stock, etc.)
+  stock?: number;
 }
-
 ```
 
 ###  Colección `🛒 Carrito de Compras`
