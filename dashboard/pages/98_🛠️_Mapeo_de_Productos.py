@@ -1,0 +1,127 @@
+# dashboard/pages/98_🛠️_Mapeo_de_Productos.py
+
+import streamlit as st
+import sys
+from pathlib import Path
+import json
+
+# --- Patrón de Importación Robusto ---
+project_root = Path(__file__).resolve().parents[2]
+if str(project_root) not in sys.path:
+    sys.path.append(str(project_root))
+
+from dashboard.auth import check_login
+from dashboard.menu import render_menu
+from etl.modules.transform import transform_single_product # Importamos la función actualizada
+
+# --- Configuración de Página y Autenticación ---
+st.set_page_config(page_title="Mapeo de Productos - LiliApp", layout="wide")
+check_login()
+render_menu()
+
+# --- Carga de Datos en Caché ---
+@st.cache_data
+def load_source_products():
+    """Carga los productos desde el archivo JSON de origen."""
+    source_file = project_root / "etl" / "data" / "source_products.json"
+    try:
+        with open(source_file, 'r', encoding='utf-8') as f:
+            raw_data = json.load(f)
+        products = {str(item['product']['id']): item['product'] for item in raw_data if 'product' in item}
+        return products
+    except Exception as e:
+        st.error(f"Error al cargar source_products.json: {e}")
+        return {}
+
+# --- Cuerpo del Dashboard ---
+st.title("🛠️ Herramienta de Mapeo de Productos (ETL)")
+st.markdown("Usa esta herramienta para seleccionar un producto de Jumpseller, ver su transformación y validar los campos contra el esquema de Firestore.")
+
+all_products = load_source_products()
+
+if not all_products:
+    st.stop()
+
+# --- 1. Selección de Producto ---
+st.subheader("1. Selecciona un Producto para Analizar")
+product_options = {pid: f"{pdata.get('name')} (ID: {pid})" for pid, pdata in all_products.items()}
+selected_product_id = st.selectbox(
+    "Elige un producto por su nombre o ID:",
+    options=list(product_options.keys()),
+    format_func=lambda pid: product_options[pid]
+)
+
+if selected_product_id:
+    source_product = all_products[selected_product_id]
+    
+    ## REF: La función de transformación ahora devuelve TRES valores.
+    transformed_service, transformed_category, transformed_variants = transform_single_product(source_product)
+    
+    st.markdown("---")
+    st.subheader("2. Visualiza la Transformación")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("#### Datos de Origen (Jumpseller)")
+        with st.expander("Ver JSON completo del producto original"):
+            st.json(source_product, expanded=False)
+            
+        st.write("Principales campos de origen:")
+        st.text_area(
+            "Fuente",
+            f"ID: {source_product.get('id')}\n"
+            f"Nombre: {source_product.get('name')}\n"
+            f"Precio: {source_product.get('price')}\n"
+            f"Estado: {source_product.get('status')}\n"
+            f"Categorías: {[cat.get('name') for cat in source_product.get('categories', [])]}\n"
+            f"Nº de Variantes: {len(source_product.get('variants', []))}",
+            height=180
+        )
+        
+    with col2:
+        st.markdown("#### Datos Transformados (Para Firestore)")
+        
+        st.write("➡️ **Colección `services`**")
+        st.json(transformed_service)
+        
+        st.write("➡️ **Colección `categories`**")
+        st.json(transformed_category)
+
+        ## REF: Añadimos una sección para mostrar las variantes transformadas.
+        st.write("➡️ **Subcolección `variants`**")
+        if transformed_variants:
+            st.json(transformed_variants)
+        else:
+            st.info("Este producto no tiene variantes definidas.")
+
+    st.markdown("---")
+    
+    # --- 3. Análisis de Campos Faltantes ---
+    st.subheader("3. Análisis de Campos y Siguientes Pasos")
+    
+    ## REF: Actualizamos el esquema ideal para incluir los nuevos campos.
+    ideal_service_schema = {
+        "id", "name", "description", "categoryId", "price", "discount", 
+        "stats", "status", "createdAt", "hasVariants"
+    }
+    
+    if transformed_service:
+        transformed_keys = set(transformed_service.keys())
+        missing_keys = ideal_service_schema - transformed_keys
+        
+        st.write("Comparando los datos transformados con el esquema ideal de la colección `services`:")
+        if missing_keys:
+            st.warning(f"**Campos Faltantes:** `{', '.join(missing_keys)}`")
+            st.info(
+                "Estos campos no se encontraron en el JSON de origen. "
+                "Para `stats`, es correcto inicializarlos en cero. "
+                "Para otros, considera si puedes derivarlos de otros campos en `transform.py`."
+            )
+        else:
+            st.success("¡Excelente! Todos los campos del esquema `services` están presentes.")
+            
+    st.markdown(
+        "**Recomendación:** Revisa la transformación. Si estás satisfecho, "
+        "puedes usar el **Panel ETL** en el menú para ejecutar la carga masiva."
+    )

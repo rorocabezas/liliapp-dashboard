@@ -19,8 +19,12 @@ def load_data_from_json(filepath: str, data_key: str, logger=st.info) -> List[Di
     logger(f"📄 Extrayendo datos desde: {filepath}...")
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
-            raw_data = json.load(f)
-        
+            raw_data = json.load(f)        
+ 
+        if not isinstance(raw_data, list):
+            st.error(f"❌ ERROR: El archivo JSON de origen no es una lista como se esperaba.")
+            return []
+
         items = [item[data_key] for item in raw_data if data_key in item]
         
         logger(f"✅ Extracción completada. Se encontraron {len(items)} '{data_key}'(s).")

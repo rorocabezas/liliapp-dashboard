@@ -3,6 +3,7 @@
 from datetime import datetime
 from typing import List, Dict, Any, Tuple
 import streamlit as st
+from bs4 import BeautifulSoup
 
 # ===================================================================
 # ===               FUNCIONES AUXILIARES (PRIVADAS)               ===
@@ -30,7 +31,6 @@ def _create_order_status_history(source_order: Dict[str, Any]) -> List[Dict[str,
             "updatedBy": "customer"
         })
 
-    # El webhook es para 'status/paid', por lo que 'completed_at' es la fecha de pago.
     paid_at = _parse_utc_string(source_order.get("completed_at"))
     if paid_at:
         history.append({
@@ -101,49 +101,72 @@ def transform_orders(source_orders: List[Dict[str, Any]], logger=st.info) -> Lis
     logger(f"✅ Transformación de {len(transformed_orders)} órdenes completada.")
     return transformed_orders
 
-def transform_products(source_products: List[Dict[str, Any]], logger=st.info) -> Tuple[List[Dict], List[Dict]]:
-    """Transforma productos de Jumpseller en una lista de servicios y una de categorías."""
-    logger("🔄 Transformando datos de Productos y Categorías...")
+def transform_single_product(product: Dict[str, Any]) -> Tuple[Dict, Dict, List[Dict]]:
+    """
+
+    Transforma un único producto de Jumpseller en un servicio, su categoría principal,
+    y una lista de sus variantes. (DEVUELVE 3 VALORES)
+    """
+    if not product:
+        return None, None, []
+
+    # --- 1. Extraer Categoría Principal ---
+    product_categories = product.get("categories", [])
+    category_id, category_data = None, None
+    if product_categories:
+        main_cat_index = 1 if len(product_categories) > 1 else 0
+        main_cat = product_categories[main_cat_index]
+        category_id = str(main_cat.get("id"))
+        category_data = {
+            "id": category_id, "name": main_cat.get("name", "Sin Categoría"),
+            "description": main_cat.get("description") or "",
+            "imageUrl": product.get("images", [{}])[0].get("url")
+        }
+
+    # --- 2. Limpiar Descripción HTML ---
+    soup = BeautifulSoup(product.get("description", ""), "html.parser")
+    clean_description = soup.get_text(separator="\n").strip()
+
+    # --- 3. Transformar Producto en Servicio ---
+    product_variants = product.get("variants", [])
+    service_data = {
+        "id": str(product.get("id")), "name": product.get("name"),
+        "description": clean_description, "categoryId": category_id,
+        "hasVariants": len(product_variants) > 0, "price": product.get("price", 0.0),
+        "discount": 0.0, "status": 'active' if product.get("status") == 'available' else 'inactive',
+        "createdAt": _parse_utc_string(product.get("created_at")),
+        "stats": {"viewCount": 0, "purchaseCount": 0, "averageRating": 0.0}
+    }
     
-    transformed_services = []
-    unique_categories = {}
+    # --- 4. Transformar Variantes ---
+    variants_data = []
+    for variant in product_variants:
+        variant_options = variant.get("options", [{}])[0]
+        new_variant = {
+            "id": str(variant.get("id")), "serviceId": service_data["id"],
+            "price": variant.get("price", 0.0),
+            "options": {"name": variant_options.get("name"), "value": variant_options.get("value")}
+        }
+        variants_data.append(new_variant)
+    
+    return service_data, category_data, variants_data
+
+def transform_products(source_products: List[Dict[str, Any]], logger=st.info) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    """
+    Orquesta la transformación de una lista de productos en servicios, categorías y variantes.
+    """
+    logger("🔄 Transformando datos de Productos, Categorías y Variantes...")
+    
+    all_services, all_variants, unique_categories = [], [], {}
 
     for product in source_products:
-        product_categories = product.get("categories", [])
-        main_category_id = None
-        
-        if product_categories:
-            main_cat = product_categories[0]
-            cat_id = str(main_cat.get("id"))
-            main_category_id = cat_id
-            
-            if cat_id not in unique_categories:
-                unique_categories[cat_id] = {
-                    "id": cat_id,
-                    "name": main_cat.get("name", "Sin Nombre"),
-                    "description": "",
-                    "imageUrl": product.get("images", [{}])[0].get("url")
-                }
-
-        new_service = {
-            "id": str(product.get("id")),
-            "name": product.get("name", "Servicio sin nombre"),
-            "description": product.get("description", ""),
-            "categoryId": main_category_id,
-            "price": product.get("price", 0.0),
-            "discount": 0,
-            "status": 'active' if product.get("status") == 'available' else 'inactive',
-            "createdAt": _parse_utc_string(product.get("created_at")),
-            "stats": {
-                "viewCount": 0,
-                "purchaseCount": 0,
-                "averageRating": 0.0
-            }
-        }
-        transformed_services.append(new_service)
+        service, category, variants = transform_single_product(product)
+        if service: all_services.append(service)
+        if variants: all_variants.extend(variants)
+        if category and category.get("id") and category["id"] not in unique_categories:
+            unique_categories[category["id"]] = category
     
-    categories_list = list(unique_categories.values())
+    categories_list = list(unique_categories.values)
     
-    logger(f"✅ Transformación completada: {len(transformed_services)} servicios y {len(categories_list)} categorías únicas encontradas.")
-    return transformed_services, categories_list
-
+    logger(f"✅ Transformación completada: {len(all_services)} servicios, {len(categories_list)} categorías y {len(all_variants)} variantes encontradas.")
+    return all_services, categories_list, all_variants

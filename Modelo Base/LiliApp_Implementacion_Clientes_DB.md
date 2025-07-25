@@ -432,8 +432,12 @@ interface Service {
   description: string;
   categoryId: string; // Relación con categorías
   
-  // Precios en CLP
-  price: number;
+    // --- CAMBIOS PARA INTEGRAR VARIANTES ---
+  hasVariants: boolean; // true si existe la subcolección 'variants', false si no.
+  price: number;        // Ahora representa el precio BASE o "Desde". El precio final está en la variante.
+    // ------------------------------------
+  
+
   discount?: number; // Descuento en CLP
   
   // Campos para BI:
@@ -446,6 +450,22 @@ interface Service {
   status: 'active' | 'inactive';
   createdAt: Timestamp; // Para análisis temporales
 }
+```
+
+#### 🛠️ Subcolección `variants` (dentro de services/{serviceId})  
+```typescript
+// services/{serviceId}/variants/{variantId}
+interface Variant {
+  id: string; // El ID de la variante de Jumpseller
+  price: number; // <-- El precio REAL que se añade al carrito.
+  options: {
+    name: string;  // ej: "¿Qué problema tiene?"
+    value: string; // ej: "No se llena el estanque"
+  };
+  sku?: string;
+  stock?: number;// Otros campos de Jumpseller si los necesitas (sku, stock, etc.)
+}
+
 ```
 
 ###  Colección `🛒 Carrito de Compras`
