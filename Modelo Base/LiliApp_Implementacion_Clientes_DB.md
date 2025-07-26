@@ -436,6 +436,9 @@ interface Service {
   hasVariants: boolean;        // true si existe la subcolección 'variants'
   hasSubcategories: boolean;   // true si existe la subcolección 'subcategories'
   price: number;               // Ahora representa el precio BASE o "Desde".
+  // Nota para UX/UI: En la vista de catálogo, este precio debe mostrarse
+  // con el prefijo "Desde $" (ej: "Desde $25.000"). El precio final
+  // se determina al seleccionar una 'Variant'.
   // ------------------------------------------
   
 
@@ -484,9 +487,11 @@ interface Variant {
 interface Cart {
   userId: string;
   items: Array<{
-    serviceId: string;
+    serviceId: string;   // ID del servicio padre (para fácil referencia)
+    variantId: string;   // ID de Variante
     quantity: number;
-    price: number;
+    price: number;       // El precio de la variante en el momento de añadirlo
+    options: object;     // Un mapa de las opciones seleccionadas (ej: {"Tamaño": "Grande"})
     addedAt: Timestamp;
   }>;
   total: number;
@@ -577,68 +582,58 @@ classDiagram
     direction LR
 
     class User {
-        <<Colección Principal>>
+        <<Collection>>
         +id: string
-        +email: string
     }
-
     class CustomerProfile {
-        <<Subcolección de User>>
+        <<Subcollection>>
         +displayName: string
-        +rut: string
     }
-
-    class Address {
-        <<Subcolección de CustomerProfile>>
-        +alias: string
-        +commune: string
+    class Cart {
+        <<Collection>>
+        +userId: string
     }
-
-    class PaymentMethod {
-        <<Subcolección de CustomerProfile>>
-        +type: string
-        +isDefault: boolean
-    }
-
-    class UserSettings {
-        <<Subcolección de User>>
-        +notifications: object
-    }
-
-    class Order {
-        <<Colección Principal>>
-        +customerId: string
-        +status: string
-    }
-
-     class Service {
-        <<Colección Principal>>
+    class Service {
+        <<Collection>>
         +name: string
         +price: number
-     }
+    }
+    class Variant {
+        <<Subcollection>>
+        +price: number
+    }
+    class Order {
+        <<Collection>>
+        +customerId: string
+    }
+    class ServiceCategory {
+        <<Collection>>
+        +name: string
+    }
 
     User "1" -- "1" CustomerProfile : "tiene"
-    User "1" -- "1" ProfessionalProfile : "puede tener" 
-    User "1" -- "1" UserSettings : "configura"
-    CustomerProfile "1" -- "*" Address : "gestiona"
-    CustomerProfile "1" -- "*" PaymentMethod : "guarda"
+    User "1" -- "1" Cart : "posee"
     CustomerProfile "1" -- "*" Order : "realiza"
-    Order "*" -- "1" Service : "contiene"
+    ServiceCategory "1" -- "*" Service : "agrupa"
+    Service "1" -- "*" Variant : "tiene"
+
+    Cart "1" -- "*" Variant : "contiene"
+    Order "1" -- "*" Variant : "contiene"
 
 ```
 
 ### Descripción de Relaciones
 
--   **Usuario y Perfiles**: Un User puede tener un CustomerProfile y/o un ProfessionalProfile.
+-   **Usuario y Perfiles**: Un `User` puede tener subcolecciones `CustomerProfile` y/o `ProfessionalProfile`.
+   
+-   **Categorías y Servicios**: Una `ServiceCategory` (nivel superior, ej: "Gasfitería") agrupa múltiples `Service`.
     
--   **Usuario y Configuraciones**: Cada User tiene un documento de UserSettings para personalizar su experiencia en la app.
-    
--   **Categorías y Servicios**: Una ServiceCategory agrupa múltiples Services.
-    
--   **Usuario y Carrito**: Cada User cliente tiene un Cart asociado.
-    
--   **Cliente y Órdenes**: Un CustomerProfile puede realizar múltiples Orders.
+-   **Servicios y sus Componentes**: Un `Service` (ej: "Reparación de Calefont") puede tener subcolecciones de `subcategories` (ej: "Calefont ionizado") y `variants` (ej: "Falla de encendido").
 
+-   **Carrito y Variantes**: Un `Cart` contiene una lista de `items` que apuntan a una `Variant` específica de un servicio, capturando el precio y las opciones seleccionadas antes de la compra.
+   
+-   **Órdenes y Variantes:** Una `Order` contiene una lista de `items` que apuntan a una `Variant` específica de un servicio, consolidando la compra final.
+-   
 
 ## 📊 Guía para el Equipo de Data Science y BI
 

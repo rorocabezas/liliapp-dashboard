@@ -4,6 +4,7 @@ from firebase_admin import firestore
 from google.cloud.firestore_v1.field_path import FieldPath 
 from typing import List, Dict, Any
 import streamlit as st
+import pandas as pd
 
 def load_data_to_firestore(collection_name: str, data: List[Dict[str, Any]], id_key: str = "id", logger=st.info):
     """

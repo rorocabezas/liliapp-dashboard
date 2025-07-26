@@ -15,7 +15,7 @@ import plotly.express as px
 from datetime import datetime, timedelta
 import os
 
-st.set_page_config(page_title="Dashboard LiliApp", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Dashboard LiliApp", layout="wide", initial_sidebar_state="auto")
 
 check_login()
 render_menu() 

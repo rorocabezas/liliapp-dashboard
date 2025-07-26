@@ -6,7 +6,9 @@ from firebase_admin import credentials
 
 # 1. Importa la instancia de configuración
 from backend.core.config import settings
-from backend.api.v1.endpoints import kpis, auth
+from backend.api.v1.endpoints import kpis, auth, crud
+
+
 
 # 2. Construye el diccionario de credenciales desde las variables de entorno
 # Nota: La clave privada necesita que los '\n' sean reemplazados por saltos de línea reales.
@@ -32,9 +34,9 @@ app = FastAPI(title="LiliApp BI API")
 # Incluir las rutas de los KPIs
 app.include_router(kpis.router, prefix="/api/v1/kpis", tags=["KPIs"])
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])
+app.include_router(crud.router, prefix="/api/v1/crud", tags=["CRUD Operations"])
 
 @app.get("/")
 def read_root():
     return {"status": "LiliApp BI API is running"}
 
-# Para correrlo localmente: uvicorn backend.main:app --reload

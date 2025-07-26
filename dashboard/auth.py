@@ -10,7 +10,7 @@ def handle_login(email, password):
     """
     Encapsula la lógica de llamada a la API para mantener el formulario limpio.
     """
-    # ... (Esta función no cambia)
+
     if not email or not password:
         st.warning("Por favor, ingresa tu email y contraseña.")
         return

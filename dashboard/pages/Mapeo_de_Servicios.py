@@ -1,4 +1,4 @@
-# dashboard/pages/Mapeo_de_datos.py
+# dashboard/pages/Mapeo_de_servicios.py
 
 import streamlit as st
 import sys
@@ -69,16 +69,25 @@ if selected_product_id:
             st.json(source_product, expanded=False)
             
         st.write("Principales campos de origen:")
-        st.text_area(
-            "Fuente",
+        # Extraemos las categorías para mostrarlas de forma más clara
+        jumpseller_categories = source_product.get('categories', [])
+        
+        main_category_name = jumpseller_categories[0].get('name') if jumpseller_categories else "Ninguna"
+        
+        subcategory_names = [cat.get('name') for cat in jumpseller_categories[1:]] if len(jumpseller_categories) > 1 else []
+
+        source_display_text = (
             f"ID: {source_product.get('id')}\n"
             f"Nombre: {source_product.get('name')}\n"
             f"Precio: {source_product.get('price')}\n"
             f"Estado: {source_product.get('status')}\n"
-            f"Categorías: {[cat.get('name') for cat in source_product.get('categories', [])]}\n"
-            f"Nº de Variantes: {len(source_product.get('variants', []))}",
-            height=180
+            f"----------------------------------\n"
+            f"Categoría Principal: {main_category_name}\n"
+            f"Subcategorías: {subcategory_names}\n"
+            f"Nº de Variantes: {len(source_product.get('variants', []))}"
         )
+        
+        st.text_area("Fuente", source_display_text, height=220)
         
     with col2:
         st.markdown("#### Datos Transformados (Para Firestore)")
@@ -89,7 +98,6 @@ if selected_product_id:
         st.write("➡️ **Colección `categories` (Categoría Principal)**")
         st.json(transformed_category)
 
-        # --- SECCIÓN AÑADIDA PARA MOSTRAR SUBCATEGORÍAS ---
         st.write("➡️ **Subcolección `subcategories`**")
         if transformed_subcategories:
             st.json(transformed_subcategories)

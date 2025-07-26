@@ -46,8 +46,14 @@ def render_menu():
         st.markdown("---")
         st.subheader("Cargas de Datos ETL")
         st.page_link("pages/cargas.py", label="ETL Masivo", icon="⚙️")
-        st.page_link("pages/Mapeo_de_datos.py", label="Mapeo de Servicios", icon="🛠️")
+        st.page_link("pages/Mapeo_de_servicios.py", label="Mapeo de Servicios", icon="🛠️")
         st.page_link("pages/Mapeo_de_ordenes.py", label="Mapeo de Ordenes", icon="🔄")
+        st.markdown("---")
+        st.subheader("Datos Maestros")
+        st.page_link("pages/servicios_crud.py", label="Servicios", icon="🛠️")
+        #st.page_link("pages/categorias_crud.py", label="Categorías (Próximamente)", icon="🗂️")
+        #st.page_link("pages/usuarios_crud.py", label="Usuarios (Próximamente)", icon="👥")
+
         
         
        

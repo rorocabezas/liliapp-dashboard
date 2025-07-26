@@ -14,8 +14,9 @@ if str(project_root) not in sys.path:
 from dashboard.auth import check_login
 from dashboard.menu import render_menu
 
-# --- Importamos nuestros módulos ETL genéricos ---
+# --- Importamos nuestros módulos ETL y el servicio de Firestore ---
 from etl.modules import extract, transform, load
+from backend.services import firestore_service
 
 # --- Configuración de Página y Autenticación ---
 st.set_page_config(page_title="Panel ETL - LiliApp", layout="wide")
@@ -38,70 +39,97 @@ with st.form("etl_runner_form"):
     
     etl_process = st.selectbox(
         "Elige el tipo de datos que deseas cargar:",
-        ("Órdenes", "Productos y Categorías", "Usuarios (Próximamente)")
+        ("Órdenes (con Usuarios y Direcciones)", "Productos y Categorías")
+    )
+
+    is_test_run = st.checkbox(
+        "Realizar una carga de prueba (solo los primeros 10 registros)", 
+        value=True # Marcado por defecto para seguridad
     )
     
     submitted = st.form_submit_button("🚀 Iniciar Proceso de Carga", use_container_width=True, type="primary")
 
     if submitted:
-        # --- Lógica de Inicialización de Firebase (común para todos los ETLs) ---
+        # --- Lógica de Inicialización de Firebase (común y robusta) ---
         try:
             if not firebase_admin._apps:
                 st.write("🔥 Inicializando conexión con Firebase...")
-                # Lógica para usar ADC o service account
-                cred_path = project_root / "serviceAccountKey.json"
-                if cred_path.exists():
-                     cred = credentials.Certificate(str(cred_path))
-                     firebase_admin.initialize_app(cred)
-                else:
-                    firebase_admin.initialize_app(options={'projectId': 'liliapp-fe07b'}) # REEMPLAZA si es necesario
+                # Usamos el método de ADC por defecto, que es más seguro
+                # Asegúrate de haber corrido 'gcloud auth application-default login'
+                firebase_admin.initialize_app(options={'projectId': 'liliapp-fe07b'}) # REEMPLAZA CON TU PROJECT ID
                 st.write("✅ Conexión establecida.")
         except Exception as e:
             st.error(f"Error al inicializar Firebase: {e}")
             st.stop()
 
         # --- ORQUESTACIÓN DEL ETL ---
-        if etl_process == "Órdenes":
+        if etl_process == "Órdenes (con Usuarios y Direcciones)":
             with st.status("Ejecutando ETL completo para Órdenes...", expanded=True) as status:
-                source_file = project_root / "etl" / "data" / "source_orders.json"
-                
-                raw_data = extract.load_data_from_json(str(source_file), "order", logger=st.write)
-                if raw_data:
-                    # 1. Transform (ahora devuelve CUATRO listas)
-                    users, profiles, addresses, orders = transform.transform_orders(raw_data, logger=st.write)
+                try:
+                    source_file = project_root / "etl" / "data" / "source_orders.json"
                     
-                    # 2. Load (cuatro cargas separadas y en orden)
-                    if users:
-                        load.load_data_to_firestore("users", users, "id", logger=st.write)
-                    if profiles:
-                        load.load_customer_profiles(profiles, logger=st.write)
-                    if addresses:
-                        load.load_addresses(addresses, logger=st.write)
-                    if orders:
-                        load.load_data_to_firestore("orders", orders, "id", logger=st.write)
+                    raw_data = extract.load_data_from_json(str(source_file), "order", logger=st.write)
+                    
+                    if is_test_run:
+                        st.warning(f"MODO PRUEBA: Se procesarán solo los primeros 10 registros.")
+                        raw_data = raw_data[:10]
+
+                    if raw_data:
+                        # --- LA CORRECCIÓN ESTÁ AQUÍ ---
+                        # 1. Obtenemos los emails existentes ANTES de transformar
+                        st.write("🔍 Obteniendo lista de usuarios existentes para evitar duplicados...")
+                        existing_users = firestore_service.get_all_documents("users")
+                        existing_user_emails = {user.get('email') for user in existing_users if user.get('email')}
+                        st.write(f"✅ Se encontraron {len(existing_user_emails)} emails existentes.")
                         
-                    status.update(label="¡ETL de Órdenes, Usuarios y Direcciones completado!", state="complete")
+                        # 2. Pasamos la lista de emails a la función de transformación
+                        users, profiles, addresses, orders = transform.transform_orders(raw_data, existing_user_emails, logger=st.write)
+                        
+                        # 3. Load (cuatro cargas separadas y en orden)
+                        if users:
+                            load.load_data_to_firestore("users", users, "id", logger=st.write)
+                        if profiles:
+                            load.load_customer_profiles(profiles, logger=st.write)
+                        if addresses:
+                            load.load_addresses(addresses, logger=st.write)
+                        if orders:
+                            load.load_data_to_firestore("orders", orders, "id", logger=st.write)
+                            
+                        status.update(label="¡ETL de Órdenes, Usuarios y Direcciones completado!", state="complete")
+                    else:
+                        status.update(label="No se encontraron datos de origen.", state="warning")
+
+                except Exception as e:
+                    status.update(label="Ocurrió un error en el ETL de Órdenes", state="error")
+                    st.exception(e)
 
         elif etl_process == "Productos y Categorías":
             with st.status("Ejecutando ETL para Productos...", expanded=True) as status:
-                source_file = project_root / "etl" / "data" / "source_products.json"
-                
-                raw_data = extract.load_data_from_json(str(source_file), "product", logger=st.write)
-                if raw_data:
-                    # 1. Transform (ahora devuelve CUATRO listas)
-                    services, categories, variants, subcategories = transform.transform_products(raw_data, logger=st.write)
+                try:
+                    source_file = project_root / "etl" / "data" / "source_products.json"
                     
-                    # 2. Load (cuatro cargas separadas y en orden)
-                    if categories:
-                        load.load_data_to_firestore("categories", categories, "id", logger=st.write)
-                    if services:
-                        load.load_data_to_firestore("services", services, "id", logger=st.write)
-                    if variants:
-                        load.load_variants_to_firestore(variants, logger=st.write)
-                    if subcategories: # <-- NUEVA CARGA
-                        load.load_subcategories_to_firestore(subcategories, logger=st.write)
-                        
-                    status.update(label="¡ETL de Productos, Categorías, Variantes y Subcategorías completado!", state="complete")
+                    raw_data = extract.load_data_from_json(str(source_file), "product", logger=st.write)
 
-        else:
-            st.info(f"El proceso ETL para '{etl_process}' aún no está implementado.")
+                    if is_test_run:
+                        st.warning(f"MODO PRUEBA: Se procesarán solo los primeros 10 registros.")
+                        raw_data = raw_data[:10]
+
+                    if raw_data:
+                        services, categories, variants, subcategories = transform.transform_products(raw_data, logger=st.write)
+                        
+                        if categories:
+                            load.load_data_to_firestore("categories", categories, "id", logger=st.write)
+                        if services:
+                            load.load_data_to_firestore("services", services, "id", logger=st.write)
+                        if variants:
+                            load.load_variants_to_firestore(variants, logger=st.write)
+                        if subcategories:
+                            load.load_subcategories_to_firestore(subcategories, logger=st.write)
+                            
+                        status.update(label="¡ETL de Productos, Categorías, Variantes y Subcategorías completado!", state="complete")
+                    else:
+                        status.update(label="No se encontraron datos de origen.", state="warning")
+
+                except Exception as e:
+                    status.update(label="Ocurrió un error en el ETL de Productos", state="error")
+                    st.exception(e)
