@@ -51,11 +51,10 @@ def render_menu():
         st.markdown("---")
         st.subheader("Datos Maestros")
         st.page_link("pages/servicios_crud.py", label="Servicios", icon="🛠️")
-        #st.page_link("pages/categorias_crud.py", label="Categorías (Próximamente)", icon="🗂️")
-        #st.page_link("pages/usuarios_crud.py", label="Usuarios (Próximamente)", icon="👥")
-
-        
-        
+        st.page_link("pages/usuarios_crud.py", label="Clientes", icon="👥")
+        st.markdown("---")      
+        st.subheader("Catálogo Jumpseller")
+        st.page_link("pages/catalogo_jumpseller.py", label="Explorador de API", icon="📦")
        
         # --- Filtros Globales ---
         st.markdown("---")

@@ -3,18 +3,64 @@
 from fastapi import APIRouter, HTTPException, Body
 from typing import List, Dict, Any
 from backend.services import firestore_service
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 
 router = APIRouter()
 
 # --- Pydantic Models for Data Validation ---
 class ServiceUpdate(BaseModel):
-    name: str
-    description: str
-    price: float
-    status: str
-    categoryId: str
+    name: str; description: str; price: float; status: str; categoryId: str
+class CategoryUpdate(BaseModel):
+    name: str; description: str = ""; imageUrl: str = ""
+class UserUpdate(BaseModel):
+    email: EmailStr; phone: str; accountStatus: str
+class CustomerProfileUpdate(BaseModel):
+    firstName: str; lastName: str; displayName: str; rut: str | None = None
+class AddressUpdate(BaseModel):
+    alias: str; street: str; number: str; commune: str; region: str; isPrimary: bool
+    
+# ===================================================================
+# ===             CRUD Endpoints for 'users' & Profiles           ===
+# ===================================================================
 
+@router.get("/users", summary="Listar todos los usuarios", tags=["CRUD - Users & Customers"])
+def list_users():
+    return firestore_service.get_all_documents("users")
+
+@router.get("/users/{user_id}/profile", summary="Obtener el perfil de un cliente", tags=["CRUD - Users & Customers"])
+def get_customer_profile(user_id: str):
+    profile = firestore_service.get_subcollection_document("users", user_id, "customer_profiles", "main")
+    if not profile: raise HTTPException(status_code=404, detail="Perfil de cliente no encontrado")
+    return profile
+
+@router.get("/users/{user_id}/addresses", summary="Listar direcciones de un cliente", tags=["CRUD - Users & Customers"])
+def get_customer_addresses(user_id: str):
+    return firestore_service.list_nested_subcollection_documents("users", user_id, "customer_profiles", "main", "addresses")
+
+@router.put("/users/{user_id}", summary="Actualizar datos de un usuario", tags=["CRUD - Users & Customers"])
+def update_user(user_id: str, user_data: UserUpdate):
+    try:
+        firestore_service.update_document("users", user_id, user_data.dict())
+        return {"status": "success", "message": f"Usuario {user_id} actualizado."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.put("/users/{user_id}/profile", summary="Actualizar perfil de un cliente", tags=["CRUD - Users & Customers"])
+def update_customer_profile(user_id: str, profile_data: CustomerProfileUpdate):
+    try:
+        firestore_service.update_subcollection_document("users", user_id, "customer_profiles", "main", profile_data.dict())
+        return {"status": "success", "message": f"Perfil del cliente {user_id} actualizado."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.put("/users/{user_id}/addresses/{address_id}", summary="Actualizar una dirección", tags=["CRUD - Users & Customers"])
+def update_address(user_id: str, address_id: str, address_data: AddressUpdate):
+    try:
+        firestore_service.update_document_in_nested_subcollection("users", user_id, "customer_profiles", "main", "addresses", address_id, address_data.dict())
+        return {"status": "success", "message": f"Dirección {address_id} actualizada."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
 # ===================================================================
 # ===               CRUD Endpoints for 'services'                 ===
 # ===================================================================
@@ -86,5 +132,109 @@ def create_category(category_data: CategoryUpdate):
         # En este caso, el ID es autogenerado por Firestore
         new_id = firestore_service.create_document("categories", category_data.dict())
         return {"status": "success", "message": "Nueva categoría creada.", "id": new_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+
+# --- Pydantic Models for 'subcategories' ---
+class SubcategoryCreate(BaseModel):
+    name: str
+
+class SubcategoryUpdate(BaseModel):
+    name: str
+
+# ===================================================================
+# ===            CRUD Endpoints for 'subcategories'               ===
+# ===================================================================
+
+@router.get("/services/{service_id}/subcategories", summary="Listar subcategorías de un servicio", tags=["CRUD - Subcategories"])
+def list_subcategories(service_id: str):
+    """Obtiene todas las subcategorías de un servicio específico."""
+    try:
+        # Usaremos una nueva función de servicio genérica para listar subcolecciones
+        return firestore_service.list_subcollection_documents("services", service_id, "subcategories")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/services/{service_id}/subcategories", summary="Crear una nueva subcategoría", tags=["CRUD - Subcategories"])
+def create_subcategory(service_id: str, subcategory_data: SubcategoryCreate):
+    """Crea una nueva subcategoría dentro de un servicio."""
+    try:
+        # Nueva función de servicio genérica
+        new_id = firestore_service.create_subcollection_document("services", service_id, "subcategories", subcategory_data.dict())
+        return {"status": "success", "message": "Nueva subcategoría creada.", "id": new_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.put("/services/{service_id}/subcategories/{subcategory_id}", summary="Actualizar una subcategoría", tags=["CRUD - Subcategories"])
+def update_subcategory(service_id: str, subcategory_id: str, subcategory_data: SubcategoryUpdate):
+    try:
+        firestore_service.update_document_in_subcollection("services", service_id, "subcategories", subcategory_id, subcategory_data.dict())
+        return {"status": "success", "message": f"Subcategoría {subcategory_id} actualizada."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/services/{service_id}/subcategories/{subcategory_id}", summary="Eliminar una subcategoría", tags=["CRUD - Subcategories"])
+def delete_subcategory(service_id: str, subcategory_id: str):
+    """Elimina una subcategoría de un servicio."""
+    try:
+        # Nueva función de servicio genérica
+        firestore_service.delete_document_in_subcollection("services", service_id, "subcategories", subcategory_id)
+        return {"status": "success", "message": f"Subcategoría {subcategory_id} eliminada."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+# --- Pydantic Models for 'variants' ---
+class VariantOption(BaseModel):
+    name: str
+    value: str
+
+class VariantCreate(BaseModel):
+    price: float
+    options: VariantOption
+    sku: str | None = None
+    stock: int = 0
+
+class VariantUpdate(BaseModel):
+    price: float
+    options: VariantOption
+    sku: str | None = None
+    stock: int = 0
+
+# ===================================================================
+# ===               CRUD Endpoints for 'variants'                 ===
+# ===================================================================
+
+@router.get("/services/{service_id}/variants", summary="Listar variantes de un servicio", tags=["CRUD - Variants"])
+def list_variants(service_id: str):
+    """Obtiene todas las variantes de un servicio específico."""
+    try:
+        return firestore_service.list_subcollection_documents("services", service_id, "variants")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/services/{service_id}/variants", summary="Crear una nueva variante", tags=["CRUD - Variants"])
+def create_variant(service_id: str, variant_data: VariantCreate):
+    """Crea una nueva variante dentro de un servicio."""
+    try:
+        new_id = firestore_service.create_subcollection_document("services", service_id, "variants", variant_data.dict())
+        return {"status": "success", "message": "Nueva variante creada.", "id": new_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.put("/services/{service_id}/variants/{variant_id}", summary="Actualizar una variante", tags=["CRUD - Variants"])
+def update_variant(service_id: str, variant_id: str, variant_data: VariantUpdate):
+    try:
+        firestore_service.update_document_in_subcollection("services", service_id, "variants", variant_id, variant_data.dict())
+        return {"status": "success", "message": f"Variante {variant_id} actualizada."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/services/{service_id}/variants/{variant_id}", summary="Eliminar una variante", tags=["CRUD - Variants"])
+def delete_variant(service_id: str, variant_id: str):
+    """Elimina una variante de un servicio."""
+    try:
+        firestore_service.delete_document_in_subcollection("services", service_id, "variants", variant_id)
+        return {"status": "success", "message": f"Variante {variant_id} eliminada."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -2,7 +2,15 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
-    # Lee todas las variables de Firebase del archivo .env
+    """
+    Gestiona la configuración de la aplicación cargando variables
+    desde un archivo .env.
+    """
+    # Configuración de Jumpseller
+    JUMPSELLER_LOGIN: str
+    JUMPSELLER_AUTHTOKEN: str
+    API_BASE_URL: str 
+    # Configuración de Firebase
     FIREBASE_TYPE: str
     FIREBASE_PROJECT_ID: str
     FIREBASE_PRIVATE_KEY_ID: str
@@ -18,8 +26,8 @@ class Settings(BaseSettings):
     FIREBASE_API_KEY: str
     PORT: int
     
-    # Esto le dice a Pydantic que busque un archivo .env
-    model_config = SettingsConfigDict(env_file=".env")
+    # Configuración para que Pydantic lea desde un archivo .env
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding='utf-8')
 
 # Creamos una única instancia que será usada en toda la aplicación
 settings = Settings()

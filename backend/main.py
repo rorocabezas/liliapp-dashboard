@@ -6,8 +6,7 @@ from firebase_admin import credentials
 
 # 1. Importa la instancia de configuración
 from backend.core.config import settings
-from backend.api.v1.endpoints import kpis, auth, crud
-
+from backend.api.v1.endpoints import kpis, auth, crud, jumpseller
 
 
 # 2. Construye el diccionario de credenciales desde las variables de entorno
@@ -35,6 +34,7 @@ app = FastAPI(title="LiliApp BI API")
 app.include_router(kpis.router, prefix="/api/v1/kpis", tags=["KPIs"])
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])
 app.include_router(crud.router, prefix="/api/v1/crud", tags=["CRUD Operations"])
+app.include_router(jumpseller.router, prefix="/api/v1/jumpseller", tags=["Jumpseller API"]) 
 
 @app.get("/")
 def read_root():

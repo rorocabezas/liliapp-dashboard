@@ -2,6 +2,7 @@
 
 from firebase_admin import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
+from firebase_admin.firestore import Query
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
@@ -83,7 +84,7 @@ def get_acquisition_kpis(start_date: datetime, end_date: datetime) -> Dict[str, 
     user_ids = [doc.id for doc in user_docs]
     rut_validated_count, region_counts = 0, {}
     for i in range(0, len(user_ids), 30):
-        batch_ids, profile_paths = user_ids[i:i+30], []
+        batch_ids = user_ids[i:i+30]
         profile_paths = [f'users/{uid}/customer_profiles/main' for uid in batch_ids]
         profiles_query = db.collection_group('customer_profiles').where(filter=FieldFilter('__name__', 'in', profile_paths))
         for profile in profiles_query.stream():
@@ -126,7 +127,7 @@ def get_engagement_kpis(start_date: datetime, end_date: datetime) -> Dict[str, A
         payment_type = doc.to_dict().get('paymentDetails', {}).get('type', 'Desconocido')
         payment_counts[payment_type] = payment_counts.get(payment_type, 0) + 1
     
-    services_ref = db.collection('services').order_by('stats.purchaseCount', direction=firestore.Query.DESCENDING).limit(5)
+    services_ref = db.collection('services').order_by('stats.purchaseCount', direction=Query.DESCENDING).limit(5)
     top_services = [{"name": doc.to_dict().get('name'), "purchases": doc.to_dict().get('stats', {}).get('purchaseCount', 0)} for doc in services_ref.stream()]
 
     return {"aov_clp": aov_clp, "purchase_frequency": purchase_frequency, "payment_method_distribution": payment_counts, "abandonment_rate": abandonment_rate, "service_performance": top_services}
@@ -245,7 +246,7 @@ def get_rfm_segmentation(period_end_date: datetime) -> Dict[str, Any]:
     if not all_orders_docs:
         return {"segment_distribution": {}, "sample_customers": {}}
 
-    orders_df = pd.DataFrame([doc.to_dict() for doc in all_orders_docs])
+    orders_df = pd.DataFrame([{**doc.to_dict(), 'id': doc.id} for doc in all_orders_docs])
     orders_df['createdAt'] = pd.to_datetime(orders_df['createdAt'])
     snapshot_date = period_end_date + timedelta(days=1)
     
@@ -265,33 +266,70 @@ def get_rfm_segmentation(period_end_date: datetime) -> Dict[str, Any]:
     return {"segment_distribution": segment_distribution, "sample_customers": sample_customers}
 
 # ===================================================================
-# ===             FUNCIONES GENÉRICAS DE CRUD                     ===
+# ===             FUNCIONES GENÉRICAS DE CRUD (ADMIN)             ===
 # ===================================================================
 
+# --- Colecciones de Nivel Superior ---
 def get_all_documents(collection_name: str) -> List[Dict[str, Any]]:
-    """Obtiene todos los documentos de una colección."""
+    """Obtiene todos los documentos de una colección de nivel superior."""
     db = get_db_client()
     docs = db.collection(collection_name).stream()
     return [{**doc.to_dict(), "id": doc.id} for doc in docs]
 
-def get_document_by_id(collection_name: str, doc_id: str) -> Dict[str, Any]:
-    """Obtiene un único documento por su ID."""
+def update_document(collection_name: str, doc_id: str, data: Dict[str, Any]):
+    """Actualiza un documento en una colección de nivel superior."""
     db = get_db_client()
-    doc_ref = db.collection(collection_name).document(doc_id)
+    db.collection(collection_name).document(doc_id).update(data)
+
+def create_document(collection_name: str, data: Dict[str, Any]) -> str:
+    """Crea un documento en una colección de nivel superior y devuelve su ID."""
+    db = get_db_client()
+    doc_ref = db.collection(collection_name).document()
+    doc_ref.set(data)
+    return doc_ref.id
+
+# --- Subcolecciones (Nivel 1) ---
+def get_subcollection_document(parent_collection: str, parent_doc_id: str, subcollection_name: str, sub_doc_id: str) -> Dict[str, Any]:
+    """Obtiene un único documento de una subcolección."""
+    db = get_db_client()
+    doc_ref = db.collection(parent_collection).document(parent_doc_id).collection(subcollection_name).document(sub_doc_id)
     doc = doc_ref.get()
     if doc.exists:
         return {**doc.to_dict(), "id": doc.id}
     return None
 
-def update_document(collection_name: str, doc_id: str, data: Dict[str, Any]):
-    """Actualiza un documento en una colección."""
+def list_subcollection_documents(parent_collection: str, parent_doc_id: str, subcollection_name: str) -> List[Dict[str, Any]]:
+    """Obtiene todos los documentos de una subcolección."""
     db = get_db_client()
-    db.collection(collection_name).document(doc_id).update(data)
+    docs = db.collection(parent_collection).document(parent_doc_id).collection(subcollection_name).stream()
+    return [{**doc.to_dict(), "id": doc.id} for doc in docs]
 
-def create_document(collection_name: str, data: Dict[str, Any]) -> str:
-    """Crea un nuevo documento en una colección y devuelve su ID."""
+def update_document_in_subcollection(parent_collection: str, parent_doc_id: str, subcollection_name: str, doc_id: str, data: Dict[str, Any]):
+    """Actualiza un documento en una subcolección."""
     db = get_db_client()
-    # Firestore genera un ID automático si no se especifica
-    doc_ref = db.collection(collection_name).document()
+    db.collection(parent_collection).document(parent_doc_id).collection(subcollection_name).document(doc_id).update(data)
+
+def create_subcollection_document(parent_collection: str, parent_doc_id: str, subcollection_name: str, data: Dict[str, Any]) -> str:
+    """Crea un documento en una subcolección y devuelve su ID."""
+    db = get_db_client()
+    doc_ref = db.collection(parent_collection).document(parent_doc_id).collection(subcollection_name).document()
     doc_ref.set(data)
     return doc_ref.id
+    
+def delete_document_in_subcollection(parent_collection: str, parent_doc_id: str, subcollection_name: str, doc_id: str):
+    """Elimina un documento de una subcolección."""
+    db = get_db_client()
+    db.collection(parent_collection).document(parent_doc_id).collection(subcollection_name).document(doc_id).delete()
+
+# --- Subcolecciones Anidadas (Nivel 2) ---
+def list_nested_subcollection_documents(p_coll: str, p_doc: str, sub_coll1: str, sub_doc1: str, sub_coll2: str) -> List[Dict[str, Any]]:
+    """Obtiene todos los documentos de una subcolección anidada (ej: addresses)."""
+    db = get_db_client()
+    docs = db.collection(p_coll).document(p_doc).collection(sub_coll1).document(sub_doc1).collection(sub_coll2).stream()
+    return [{**doc.to_dict(), "id": doc.id} for doc in docs]
+
+def update_document_in_nested_subcollection(p_coll: str, p_doc: str, sub_coll1: str, sub_doc1: str, sub_coll2: str, doc_id: str, data: Dict[str, Any]):
+    """Actualiza un documento en una subcolección anidada."""
+    db = get_db_client()
+    doc_ref = db.collection(p_coll).document(p_doc).collection(sub_coll1).document(sub_doc1).collection(sub_coll2).document(doc_id)
+    doc_ref.update(data)
