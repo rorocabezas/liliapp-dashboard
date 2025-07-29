@@ -1,9 +1,8 @@
-# backend/services/firestore_service.py
-
+import pandas as pd
+import traceback
 from firebase_admin import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
 from firebase_admin.firestore import Query
-import pandas as pd
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 
@@ -62,43 +61,106 @@ def get_summary_kpis(start_date: datetime, end_date: datetime) -> Dict[str, Any]
 # ===         FUNCIONES PARA LA PÁGINA DE ADQUISICIÓN             ===
 # ===================================================================
 
-def get_acquisition_kpis(start_date: datetime, end_date: datetime) -> Dict[str, Any]:
-    """Calcula todos los KPIs relacionados con la adquisición de usuarios."""
+def get_all_documents_from_subcollection(main_collection_name: str, subcollection_name: str) -> list:
+    """
+    Obtiene todos los docs de una subcolección y enriquece cada uno
+    con el ID de su documento padre como 'userId'.
+    """
     db = get_db_client()
-    users_ref = db.collection('users')
-    
-    query = users_ref.where(filter=FieldFilter('createdAt', '>=', start_date)).where(filter=FieldFilter('createdAt', '<=', end_date))
-    user_docs = list(query.stream())
-    
-    if not user_docs:
-        return {"new_users_count": 0, "onboarding_rate": 0, "rut_validation_rate": 0, "channel_distribution": {}, "region_distribution": {}}
+    all_docs = []
+    main_collection_ref = db.collection(main_collection_name)
+    for doc in main_collection_ref.stream():
+        # Obtenemos el ID del documento padre (ej: el ID del usuario)
+        parent_id = doc.id
+        subcollection_ref = doc.reference.collection(subcollection_name)
+        for sub_doc in subcollection_ref.stream():
+            # Convertimos el subdocumento a diccionario
+            sub_doc_data = sub_doc.to_dict()
+            # Agregamos el ID del documento padre
+            sub_doc_data['userId'] = parent_id
+            all_docs.append(sub_doc_data)
+    return all_docs
 
-    total_new_users = len(user_docs)
-    onboarding_completed_count = sum(1 for doc in user_docs if doc.to_dict().get('onboardingCompleted'))
-    
-    channel_counts = {}
-    for doc in user_docs:
-        source = doc.to_dict().get('acquisitionInfo', {}).get('source', 'Desconocido')
-        channel_counts[source] = channel_counts.get(source, 0) + 1
-    
-    user_ids = [doc.id for doc in user_docs]
-    rut_validated_count, region_counts = 0, {}
-    for i in range(0, len(user_ids), 30):
-        batch_ids = user_ids[i:i+30]
-        profile_paths = [f'users/{uid}/customer_profiles/main' for uid in batch_ids]
-        profiles_query = db.collection_group('customer_profiles').where(filter=FieldFilter('__name__', 'in', profile_paths))
-        for profile in profiles_query.stream():
-            profile_data = profile.to_dict()
-            if profile_data.get('rutVerified'): rut_validated_count += 1
-            region = profile_data.get('primaryAddressRegion', 'Sin Región')
-            region_counts[region] = region_counts.get(region, 0) + 1
+def get_acquisition_kpis(date_range_start: datetime, date_range_end: datetime) -> dict:
+    """
+    Calcula KPIs de adquisición, incluyendo una serie de tiempo diaria de nuevos usuarios.
+    """
+    print("\n--- Iniciando cálculo de KPIs de Adquisición (con series de tiempo) ---")
+    try:
+        print("Paso 1: Obteniendo documentos de 'users' y 'customer_profiles'...")
+        users_docs = get_all_documents("users")
+        profiles_docs = get_all_documents_from_subcollection("users", "customer_profiles")
+
+        if not users_docs:
+            print("  -> Advertencia: No se encontraron documentos en 'users'.")
+            return {"new_users": 0, "onboarding_rate": 0, "acquisition_by_region": {}, "daily_new_users": {}}
+        print(f"  -> Obtenidos {len(users_docs)} users y {len(profiles_docs)} profiles.")
+
+        print("Paso 3: Creando DataFrames de Pandas...")
+        df_users = pd.DataFrame(users_docs)
+        df_profiles = pd.DataFrame(profiles_docs) if profiles_docs else pd.DataFrame(columns=['userId', 'primaryAddressRegion'])
+        print("  -> DataFrames creados exitosamente.")
+
+        print(f"Paso 4: Filtrando usuarios por rango de fechas: {date_range_start.date()} a {date_range_end.date()}")
+        if 'createdAt' not in df_users.columns:
+            raise ValueError("La columna 'createdAt' no existe en los documentos de 'users'.")
             
-    return {
-        "new_users_count": total_new_users,
-        "onboarding_rate": (onboarding_completed_count / total_new_users) * 100 if total_new_users > 0 else 0,
-        "rut_validation_rate": (rut_validated_count / total_new_users) * 100 if total_new_users > 0 else 0,
-        "channel_distribution": channel_counts, "region_distribution": region_counts
-    }
+        df_users['createdAt'] = pd.to_datetime(df_users['createdAt'], errors='coerce').dt.tz_convert('UTC')
+        df_users.dropna(subset=['createdAt'], inplace=True)
+
+        mask = (df_users['createdAt'] >= date_range_start) & (df_users['createdAt'] <= date_range_end)
+        df_filtered_users = df_users.loc[mask].copy()
+        new_users_count = len(df_filtered_users)
+        
+        if new_users_count == 0:
+            print("--- Cálculo finalizado: No hay nuevos usuarios en el período. ---")
+            return {"new_users": 0, "onboarding_rate": 0, "acquisition_by_region": {}, "daily_new_users": {"dates": [], "counts": []}}
+        
+        print(f"  -> {new_users_count} usuarios encontrados en el rango de fechas.")
+
+        print("Paso 5: Calculando serie de tiempo diaria...")
+        df_filtered_users['signup_date'] = pd.to_datetime(df_filtered_users['createdAt']).dt.date
+        daily_counts = df_filtered_users.groupby('signup_date').size()
+        
+        full_date_range = pd.date_range(start=date_range_start.date(), end=date_range_end.date())
+        daily_counts = daily_counts.reindex(full_date_range.date, fill_value=0)
+
+        
+        datetime_index = pd.to_datetime(daily_counts.index)
+        daily_new_users_series = {
+            "dates": datetime_index.strftime('%Y-%m-%d').tolist(), 
+            "counts": daily_counts.values.tolist()
+        }
+        print("  -> Serie de tiempo calculada.")
+        
+        print("Paso 6: Calculando KPIs restantes...")
+        if 'onboardingCompleted' not in df_filtered_users.columns:
+            df_filtered_users['onboardingCompleted'] = False
+        df_filtered_users['onboardingCompleted'] = df_filtered_users['onboardingCompleted'].fillna(False)
+        completed_onboarding = df_filtered_users['onboardingCompleted'].sum()
+        onboarding_rate = (completed_onboarding / new_users_count) * 100
+        print(f"  -> Tasa de Onboarding: {onboarding_rate:.2f}%")
+            
+        if not df_profiles.empty:
+            df_merged = pd.merge(df_filtered_users, df_profiles, left_on='id', right_on='userId', how='left')
+            acquisition_by_region = df_merged['primaryAddressRegion'].fillna('No especificada').value_counts().to_dict()
+        else:
+            acquisition_by_region = {}
+        print(f"  -> Adquisición por Región: {acquisition_by_region}")
+
+        result = {
+            "new_users": new_users_count,
+            "onboarding_rate": round(onboarding_rate, 2),
+            "acquisition_by_region": acquisition_by_region,
+            "daily_new_users": daily_new_users_series
+        }
+        print("--- Cálculo de KPIs finalizado con éxito. ---")
+        return result
+
+    except Exception as e:
+        print(f"!!! ERROR CATASTRÓFICO en get_acquisition_kpis: {repr(e)}")
+        traceback.print_exc()
+        return {}
 
 # ===================================================================
 # ===       FUNCIONES PARA LA PÁGINA DE ENGAGEMENT Y CONVERSIÓN   ===
@@ -269,7 +331,6 @@ def get_rfm_segmentation(period_end_date: datetime) -> Dict[str, Any]:
 # ===             FUNCIONES GENÉRICAS DE CRUD (ADMIN)             ===
 # ===================================================================
 
-# --- Colecciones de Nivel Superior ---
 def get_all_documents(collection_name: str) -> List[Dict[str, Any]]:
     """Obtiene todos los documentos de una colección de nivel superior."""
     db = get_db_client()
@@ -288,7 +349,6 @@ def create_document(collection_name: str, data: Dict[str, Any]) -> str:
     doc_ref.set(data)
     return doc_ref.id
 
-# --- Subcolecciones (Nivel 1) ---
 def get_subcollection_document(parent_collection: str, parent_doc_id: str, subcollection_name: str, sub_doc_id: str) -> Dict[str, Any]:
     """Obtiene un único documento de una subcolección."""
     db = get_db_client()
@@ -321,7 +381,6 @@ def delete_document_in_subcollection(parent_collection: str, parent_doc_id: str,
     db = get_db_client()
     db.collection(parent_collection).document(parent_doc_id).collection(subcollection_name).document(doc_id).delete()
 
-# --- Subcolecciones Anidadas (Nivel 2) ---
 def list_nested_subcollection_documents(p_coll: str, p_doc: str, sub_coll1: str, sub_doc1: str, sub_coll2: str) -> List[Dict[str, Any]]:
     """Obtiene todos los documentos de una subcolección anidada (ej: addresses)."""
     db = get_db_client()
@@ -333,3 +392,91 @@ def update_document_in_nested_subcollection(p_coll: str, p_doc: str, sub_coll1: 
     db = get_db_client()
     doc_ref = db.collection(p_coll).document(p_doc).collection(sub_coll1).document(sub_doc1).collection(sub_coll2).document(doc_id)
     doc_ref.update(data)
+
+
+def get_firestore_data_for_audit(order_id: str) -> dict:
+    """
+    Recopila todos los documentos de Firestore relacionados con un ID de orden.
+    """
+    db = get_db_client()
+    audit_data = {
+        "order": None,
+        "user": None,
+        "profile": None,
+        "address": None
+    }
+
+    # 1. Obtener la orden
+    order_ref = db.collection("orders").document(order_id)
+    order_doc = order_ref.get()
+    if not order_doc.exists:
+        return {"error": f"Orden con ID {order_id} no encontrada en Firestore."}
+    
+    order_data = order_doc.to_dict()
+    audit_data["order"] = order_data
+
+    # 2. Obtener el usuario
+    user_id = order_data.get("userId")
+    if user_id:
+        user_ref = db.collection("users").document(user_id)
+        user_doc = user_ref.get()
+        if user_doc.exists:
+            audit_data["user"] = user_doc.to_dict()
+
+    # 3. Obtener el perfil
+    if user_id:
+        # Asumiendo que el profileId es el mismo que el userId
+        profile_ref = db.collection("users").document(user_id).collection("customer_profiles").document(user_id)
+        profile_doc = profile_ref.get()
+        if profile_doc.exists:
+            audit_data["profile"] = profile_doc.to_dict()
+
+    # 4. Obtener la dirección
+    address_id = order_data.get("addressId")
+    if user_id and address_id:
+        # Asumiendo la estructura de subcolección anidada
+        address_ref = db.collection("users").document(user_id).collection("customer_profiles").document(user_id).collection("addresses").document(address_id)
+        address_doc = address_ref.get()
+        if address_doc.exists:
+            audit_data["address"] = address_doc.to_dict()
+
+    return audit_data
+
+def get_firestore_service_data_for_audit(service_id: str) -> dict:
+    """
+    Recopila todos los documentos de Firestore relacionados con un ID de servicio.
+    """
+    db = get_db_client()
+    audit_data = {
+        "service": None,
+        "category": None,
+        "variants": [],
+        "subcategories": []
+    }
+
+    # 1. Obtener el servicio
+    service_ref = db.collection("services").document(service_id)
+    service_doc = service_ref.get()
+    if not service_doc.exists:
+        return {"error": f"Servicio con ID {service_id} no encontrado en Firestore."}
+    
+    service_data = service_doc.to_dict()
+    audit_data["service"] = service_data
+
+    # 2. Obtener la categoría
+    category_id = service_data.get("categoryId")
+    if category_id:
+        category_ref = db.collection("categories").document(str(category_id))
+        category_doc = category_ref.get()
+        if category_doc.exists:
+            audit_data["category"] = category_doc.to_dict()
+
+    # 3. Obtener las variantes
+    variants_ref = service_ref.collection("variants").stream()
+    audit_data["variants"] = [doc.to_dict() for doc in variants_ref]
+
+    # 4. Obtener las subcategorías
+    subcategories_ref = service_ref.collection("subcategories").stream()
+    audit_data["subcategories"] = [doc.to_dict() for doc in subcategories_ref]
+
+    return audit_data

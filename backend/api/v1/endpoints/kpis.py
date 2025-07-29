@@ -1,7 +1,8 @@
 # backend/api/v1/endpoints/kpis.py
-from fastapi import APIRouter, HTTPException
-from datetime import date, datetime
+from fastapi import APIRouter, HTTPException, Query 
+from datetime import date, datetime, timedelta, timezone
 from backend.services import firestore_service
+
 
 router = APIRouter()
 
@@ -21,19 +22,30 @@ def get_summary_kpis_endpoint(start_date: date, end_date: date):
         raise HTTPException(status_code=500, detail="Error interno del servidor al procesar KPIs de resumen.")
 
 # --- funcion para pagina de Adquisición y Crecimiento ---
-@router.get("/acquisition", summary="KPIs de Adquisición", tags=["Dashboard Pages"])
-def get_acquisition_kpis_endpoint(start_date: date, end_date: date):
-    """Obtiene todos los KPIs para la página de Adquisición."""
-    try:
-        start_datetime = datetime.combine(start_date, datetime.min.time())
-        end_datetime = datetime.combine(end_date, datetime.max.time())
-        data = firestore_service.get_acquisition_kpis(start_datetime, end_datetime)
-        data['onboarding_rate'] = round(data.get('onboarding_rate', 0), 2)
-        data['rut_validation_rate'] = round(data.get('rut_validation_rate', 0), 2)
-        return data
-    except Exception as e:
-        print(f"Error en endpoint /acquisition: {e}")
-        raise HTTPException(status_code=500, detail="Error interno del servidor al procesar KPIs de adquisición.")
+@router.get("/acquisition", summary="Obtener KPIs de Adquisición de Clientes")
+def get_acquisition_kpis_endpoint(
+    start_date: str = Query(None, description="Fecha de inicio (YYYY-MM-DD)"),
+    end_date: str = Query(None, description="Fecha de fin (YYYY-MM-DD)")
+):
+    """
+    Devuelve un resumen de los KPIs de adquisición.
+    Si no se proveen fechas, usa los últimos 30 días por defecto.
+    """
+    if start_date and end_date:
+        # Creamos las fechas "ingenuas"
+        naive_start = datetime.strptime(start_date, "%Y-%m-%d")
+        naive_end = datetime.strptime(end_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59) # Incluir todo el día
+        
+        # --- CORRECCIÓN: Hacemos las fechas "conscientes" de UTC ---
+        range_start = naive_start.replace(tzinfo=timezone.utc)
+        range_end = naive_end.replace(tzinfo=timezone.utc)
+    else:
+        # datetime.now(timezone.utc) ya es consciente de la zona horaria
+        range_end = datetime.now(timezone.utc)
+        range_start = range_end - timedelta(days=30)
+        
+    kpis = firestore_service.get_acquisition_kpis(range_start, range_end)
+    return kpis
     
 # --- funcion para pagina de Engagement y Conversión ---
 @router.get("/engagement", summary="KPIs de Engagement", tags=["Dashboard Pages"])

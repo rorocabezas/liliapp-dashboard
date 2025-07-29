@@ -1,187 +1,164 @@
-# etl/modules/load.py
-
-from firebase_admin import firestore
-from google.cloud.firestore_v1.field_path import FieldPath 
-from typing import List, Dict, Any
 import streamlit as st
-import pandas as pd
+from firebase_admin import firestore
 
-def load_data_to_firestore(collection_name: str, data: List[Dict[str, Any]], id_key: str = "id", logger=st.info):
+# --- HELPER FUNCTIONS ---
+def get_db_client():
+    return firestore.client()
+
+# ==========================================================
+# ===         FUNCIONES DE CARGA GENÉRICAS               ===
+# ==========================================================
+
+def load_data_to_firestore(collection_name: str, data: list, id_field: str, logger=st.info):
     """
-    Función genérica para cargar datos a una COLECCIÓN PRINCIPAL de forma inteligente.
+    Carga una lista de diccionarios a una colección de nivel superior en Firestore.
+    Usa el valor de 'id_field' como el ID del documento.
     """
-    logger(f"📤 Iniciando carga a la colección '{collection_name}'...")
-    
     if not data:
-        logger(f"  ⚠️ No hay datos para cargar en '{collection_name}'. Saltando proceso.")
+        logger(f"🧘 No hay nuevos datos para cargar en '{collection_name}'.")
         return
 
-    db = firestore.client()
-    collection_ref = db.collection(collection_name)
-    
-    ids_to_process = [item.get(id_key) for item in data if item.get(id_key)]
-    
-    logger(f"  🔍 Verificando {len(ids_to_process)} documentos existentes...")
-    existing_docs = {}
-    if ids_to_process:
-        for i in range(0, len(ids_to_process), 30):
-            batch_ids = ids_to_process[i:i+30]
-            query = collection_ref.where(FieldPath.document_id(), 'in', batch_ids)
-            for doc in query.stream():
-                existing_docs[doc.id] = doc.to_dict()
-    logger(f"  ✅ Se encontraron {len(existing_docs)} documentos preexistentes.")
-
+    db = get_db_client()
     batch = db.batch()
-    commit_count, items_to_create, items_to_update, items_unchanged = 0, 0, 0, 0
+    
+    logger(f"🚀 Procesando '{collection_name}'... {len(data)} registros.")
+    
+    created_count = 0
+    updated_count = 0
+    unchanged_count = 0
 
-    progress_bar = st.progress(0, text=f"Procesando lotes para '{collection_name}'...")
-    total_items = len(data)
-
-    for i, item_data in enumerate(data):
-        doc_id = item_data.pop(id_key, None)
-        if not doc_id: continue
-
-        doc_ref = collection_ref.document(doc_id)
+    for item in data:
+        doc_id = str(item.get(id_field))
+        if not doc_id:
+            logger(f"⚠️ Saltando registro en '{collection_name}' por falta de ID.")
+            continue
         
-        if doc_id not in existing_docs:
-            batch.set(doc_ref, item_data)
-            items_to_create += 1
-            commit_count += 1
-        else:
-            existing_data = existing_docs[doc_id]
-            has_changes = any(str(item_data.get(key)) != str(existing_data.get(key)) for key in item_data.keys())
+        doc_ref = db.collection(collection_name).document(doc_id)
+        # Aquí podrías añadir lógica para comparar con datos existentes si fuera necesario
+        # Por ahora, asumimos que son todos nuevos o se sobreescriben.
+        batch.set(doc_ref, item)
+        created_count += 1
+
+    batch.commit()
+    
+    summary = (
+        f"Resumen de Carga para '{collection_name}':\n"
+        f"✨ Creados: {created_count} | "
+        f"🔄 Actualizados: {updated_count} | "
+        f"🧘 Sin cambios: {unchanged_count}"
+    )
+    logger(summary)
+
+# ==========================================================
+# ===         FUNCIONES DE CARGA ESPECÍFICAS             ===
+# ==========================================================
+
+def load_customer_profiles(profiles_data: list, logger=st.info):
+    """
+    Carga datos de perfiles de cliente en la subcolección 
+    users/{userId}/customer_profiles.
+    """
+    if not profiles_data:
+        logger("🧘 No hay nuevos perfiles de cliente para cargar.")
+        return
+
+    db = get_db_client()
+    batch = db.batch()
+    
+    logger(f"🚀 Procesando 'customer_profiles'... {len(profiles_data)} registros.")
+    
+    for profile_data in profiles_data:
+        # --- CORRECCIÓN: Usar 'userId' en lugar de 'customerId' ---
+        user_id = profile_data.pop('userId', None)
+        profile_id = profile_data.get('id')
+
+        if not user_id or not profile_id:
+            logger("⚠️ Saltando perfil por falta de 'userId' o 'id'.")
+            continue
             
-            if has_changes:
-                batch.set(doc_ref, item_data, merge=True)
-                items_to_update += 1
-                commit_count += 1
-            else:
-                items_unchanged += 1
+        doc_ref = db.collection('users').document(user_id).collection('customer_profiles').document(profile_id)
+        batch.set(doc_ref, profile_data)
 
-        if commit_count >= 400 or (i + 1) == total_items:
-            if commit_count > 0:
-                batch.commit()
-                logger(f"  ...Lote de {commit_count} operaciones para '{collection_name}' procesado.")
-                batch = db.batch()
-                commit_count = 0
-        
-        progress_bar.progress((i + 1) / total_items, text=f"Procesando '{collection_name}'... {i+1}/{total_items}")
+    batch.commit()
+    logger(f"✅ Carga de {len(profiles_data)} perfiles completada.")
 
-    st.success(f"Resumen de Carga para '{collection_name}':")
-    col1, col2, col3 = st.columns(3)
-    col1.metric(f"✨ Creados", items_to_create)
-    col2.metric(f"🔄 Actualizados", items_to_update)
-    col3.metric(f"🧘 Sin cambios", items_unchanged)
-
-def load_variants_to_firestore(variants: List[Dict[str, Any]], logger=st.info):
+def load_addresses(addresses_data: list, logger=st.info):
     """
-    Función especializada para cargar variantes a sus respectivas SUBCOLECCIONES en 'services'.
+    Carga direcciones en la subcolección anidada
+    users/{userId}/customer_profiles/main/addresses.
     """
-    logger("📤 Iniciando carga de Variantes a subcolecciones...")
-    
-    if not variants:
-        logger("  ⚠️ No hay variantes para cargar. Saltando proceso.")
+    if not addresses_data:
+        logger("🧘 No hay nuevas direcciones para cargar.")
         return
 
-    db = firestore.client()
+    db = get_db_client()
     batch = db.batch()
-    commit_count = 0
+    
+    logger(f"🚀 Procesando 'addresses'... {len(addresses_data)} registros.")
 
-    progress_bar = st.progress(0, text="Procesando lotes para 'variantes'...")
-    total_items = len(variants)
+    for address_data in addresses_data:
+        # --- CORRECCIÓN: Usar 'userId' en lugar de 'customerId' ---
+        user_id = address_data.pop('userId', None)
+        address_id = address_data.get('id')
 
-    for i, variant_data in enumerate(variants):
-        service_id = variant_data.pop("serviceId", None)
-        variant_id = variant_data.pop("id", None)
+        if not user_id or not address_id:
+            logger("⚠️ Saltando dirección por falta de 'userId' o 'id'.")
+            continue
+            
+        # Asumimos que el profileId es el mismo que el userId
+        profile_id = user_id
+        doc_ref = db.collection('users').document(user_id).collection('customer_profiles').document(profile_id).collection('addresses').document(address_id)
+        batch.set(doc_ref, address_data)
         
-        if not service_id or not variant_id: continue
+    batch.commit()
+    logger(f"✅ Carga de {len(addresses_data)} direcciones completada.")
+
+def load_variants_to_firestore(variants_data: list, logger=st.info):
+    """Carga variantes en la subcolección services/{serviceId}/variants."""
+    if not variants_data:
+        logger("🧘 No hay nuevas variantes para cargar.")
+        return
+
+    db = get_db_client()
+    batch = db.batch()
+    
+    logger(f"🚀 Procesando 'variants'... {len(variants_data)} registros.")
+
+    for variant_data in variants_data:
+        service_id = variant_data.pop('serviceId', None)
+        variant_id = variant_data.get('id')
+
+        if not service_id or not variant_id:
+            logger("⚠️ Saltando variante por falta de 'serviceId' o 'id'.")
+            continue
 
         doc_ref = db.collection('services').document(service_id).collection('variants').document(variant_id)
-        
-        batch.set(doc_ref, variant_data, merge=True)
-        commit_count += 1
-
-        if commit_count >= 400 or (i + 1) == total_items:
-            if commit_count > 0:
-                batch.commit()
-                logger(f"  ...Lote de {commit_count} variantes procesado.")
-                batch = db.batch()
-                commit_count = 0
-        
-        progress_bar.progress((i + 1) / total_items, text=f"Procesando 'variantes'... {i+1}/{total_items}")
-    
-    st.success(f"Resumen de Carga para 'variantes': {total_items} documentos procesados.")
-
-
-def load_subcategories_to_firestore(subcategories: List[Dict[str, Any]], logger=st.info):
-    """
-    Función especializada para cargar subcategorías a sus respectivas subcolecciones en 'services'.
-    """
-    logger("📤 Iniciando carga de Subcategorías a subcolecciones...")
-    if not subcategories:
-        logger("  ⚠️ No hay subcategorías para cargar. Saltando proceso.")
-        return
-        
-    db = firestore.client()
-    
-    df = pd.DataFrame(subcategories)
-    grouped_subcategories = df.groupby('serviceId')
-    
-    progress_bar = st.progress(0, text="Procesando lotes para 'subcategorías'...")
-    total_groups = len(grouped_subcategories)
-
-    for i, (service_id, group) in enumerate(grouped_subcategories):
-        service_ref = db.collection('services').document(service_id)
-        subcategories_ref = service_ref.collection('subcategories') # <-- Nombre de la subcolección
-        
-        batch = db.batch()
-        for _, subcategory_row in group.iterrows():
-            subcategory_data = subcategory_row.to_dict()
-            subcategory_id = subcategory_data.pop('id')
-            subcategory_data.pop('serviceId')
-            
-            doc_ref = subcategories_ref.document(subcategory_id)
-            batch.set(doc_ref, subcategory_data, merge=True)
-        
-        batch.commit()
-        progress_bar.progress((i + 1) / total_groups, text=f"Cargando subcategorías para servicio {service_id}...")
-
-    st.success(f"Resumen de Carga para 'subcategorías': {len(subcategories)} documentos procesados.")
-
-def load_customer_profiles(profiles: List[Dict[str, Any]], logger=st.info):
-    """Carga los perfiles de cliente a su subcolección 'customer_profiles'."""
-    logger("📤 Iniciando carga de Perfiles de Cliente a subcolecciones...")
-    if not profiles:
-        logger("  ⚠️ No hay perfiles para cargar.")
-        return
-        
-    db = firestore.client()
-    batch = db.batch()
-    
-    for profile_data in profiles:
-        user_id = profile_data.pop('id')
-        doc_ref = db.collection('users').document(user_id).collection('customer_profiles').document('main') # Usamos 'main' como ID fijo
-        batch.set(doc_ref, profile_data, merge=True)
-    
-    batch.commit()
-    logger(f"✅ Carga de {len(profiles)} perfiles de cliente completada.")
-
-
-def load_addresses(addresses: List[Dict[str, Any]], logger=st.info):
-    """Carga las direcciones a su subcolección 'addresses'."""
-    logger("📤 Iniciando carga de Direcciones a subcolecciones...")
-    if not addresses:
-        logger("  ⚠️ No hay direcciones para cargar.")
-        return
-        
-    db = firestore.client()
-    batch = db.batch()
-    
-    for address_data in addresses:
-        customer_id = address_data.pop('customerId')
-        address_id = address_data.pop('id')
-        doc_ref = db.collection('users').document(customer_id).collection('customer_profiles').document('main').collection('addresses').document(address_id)
-        batch.set(doc_ref, address_data, merge=True)
+        batch.set(doc_ref, variant_data)
         
     batch.commit()
-    logger(f"✅ Carga de {len(addresses)} direcciones completada.")
+    logger(f"✅ Carga de {len(variants_data)} variantes completada.")
+
+def load_subcategories_to_firestore(subcategories_data: list, logger=st.info):
+    """Carga subcategorías en la subcolección services/{serviceId}/subcategories."""
+    if not subcategories_data:
+        logger("🧘 No hay nuevas subcategorías para cargar.")
+        return
+
+    db = get_db_client()
+    batch = db.batch()
+
+    logger(f"🚀 Procesando 'subcategories'... {len(subcategories_data)} registros.")
+
+    for subcat_data in subcategories_data:
+        service_id = subcat_data.pop('serviceId', None)
+        subcat_id = subcat_data.get('id')
+
+        if not service_id or not subcat_id:
+            logger("⚠️ Saltando subcategoría por falta de 'serviceId' o 'id'.")
+            continue
+
+        doc_ref = db.collection('services').document(service_id).collection('subcategories').document(subcat_id)
+        batch.set(doc_ref, subcat_data)
+        
+    batch.commit()
+    logger(f"✅ Carga de {len(subcategories_data)} subcategorías completada.")

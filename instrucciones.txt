@@ -6,7 +6,7 @@ venv\Scripts\activate
 uvicorn backend.main:app --reload
 
 # Correr Streamlit:
-streamlit run dashboard/app.py
+streamlit run dashboard/home.py
 
 usuario: admin1@gmail.com
 pass: 123456

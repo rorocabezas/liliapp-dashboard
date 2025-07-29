@@ -1,8 +1,11 @@
 # backend/api/v1/endpoints/jumpseller.py
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from backend.services import jumpseller_service
+
+
 
 router = APIRouter()
 
@@ -23,16 +26,20 @@ def get_orders_endpoint(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/products", summary="Obtener Productos", tags=["Jumpseller API"])
-def get_products_endpoint(
-    status: str = Query("available", description="Estado del producto"),
-    limit: int = Query(20, le=100),
-    page: int = Query(1)
-):
-    try:
-        return jumpseller_service.get_products(limit=limit, page=page, status=status)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+@router.get("/products",
+            summary="Obtener todos los productos de Jumpseller (vía Streaming)",
+            tags=["Jumpseller API Explorer"])
+def stream_jumpseller_products(status: str = "available"):
+    """
+    Endpoint que obtiene todos los productos de Jumpseller usando una conexión
+    de streaming para evitar timeouts en catálogos grandes.
+    Devuelve los productos en formato JSON-Lines (un JSON por línea).
+    """
+    # Devolvemos una StreamingResponse que consume nuestro generador
+    return StreamingResponse(
+        jumpseller_service.stream_all_jumpseller_products(status),
+        media_type="application/x-json-stream"
+    )
 
 @router.get("/categories", summary="Obtener Categorías", tags=["Jumpseller API"])
 def get_categories_endpoint(limit: int = Query(50, le=100), page: int = 1):
@@ -47,3 +54,84 @@ def create_category_endpoint(category: CategoryCreate):
         return jumpseller_service.create_category(name=category.name, parent_id=category.parent_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+
+class CustomerUpdate(BaseModel):
+    email: str | None = None
+    fullname: str | None = None
+    phone: str | None = None
+
+@router.get("/customers", summary="Obtener Clientes", tags=["Jumpseller API"])
+def get_customers_endpoint(limit: int = 20, page: int = 1):
+    try:
+        return jumpseller_service.get_customers(limit=limit, page=page)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.put("/customers/{customer_id}", summary="Actualizar un Cliente", tags=["Jumpseller API"])
+def update_customer_endpoint(customer_id: int, customer_data: CustomerUpdate):
+    try:
+        # Pydantic nos asegura que solo pasamos los campos permitidos
+        return jumpseller_service.update_customer(customer_id, customer_data.dict(exclude_unset=True))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/customers/{customer_id}", summary="Eliminar un Cliente", tags=["Jumpseller API"])
+def delete_customer_endpoint(customer_id: int):
+    try:
+        return jumpseller_service.delete_customer(customer_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@router.get("/customers/{customer_id}",
+            summary="Obtener un Cliente de Jumpseller por ID",
+            tags=["Jumpseller API Explorer"])
+def get_jumpseller_customer_by_id(customer_id: int):
+    """
+    Endpoint para obtener los detalles de un cliente específico desde Jumpseller.
+    """
+    customer_data = jumpseller_service.get_customer_by_id(customer_id)
+    if not customer_data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Customer with ID {customer_id} not found in Jumpseller."
+        )
+    return customer_data
+
+@router.get("/store-health-summary",
+            summary="Obtener Resumen de Salud de la Tienda Jumpseller",
+            tags=["Jumpseller API Explorer"])
+def get_jumpseller_store_health():
+    """
+    Endpoint que agrega los conteos de recursos clave (órdenes, productos, clientes)
+    de Jumpseller para un dashboard de salud.
+    """
+    summary_data = jumpseller_service.get_store_health_summary()
+    return summary_data
+
+@router.get("/stream-orders",
+            summary="Obtener todas las Órdenes de Jumpseller (vía Streaming)",
+            tags=["Jumpseller API Explorer"])
+def stream_jumpseller_orders(status: str = "paid"):
+    """
+    Endpoint que obtiene todas las órdenes de Jumpseller usando una conexión
+    de streaming para evitar timeouts. Devuelve en formato JSON-Lines.
+    """
+    return StreamingResponse(
+        jumpseller_service.stream_all_jumpseller_orders(status),
+        media_type="application/x-json-stream"
+    )
+
+@router.get("/orders/{order_id}",
+            summary="Obtener una Orden de Jumpseller por ID",
+            tags=["Jumpseller API Explorer"])
+def get_jumpseller_order_by_id(order_id: int):
+    """
+    Endpoint para obtener los detalles completos de una orden específica.
+    """
+    try:
+ 
+        order_data = jumpseller_service.get_orders(order_id=order_id) 
+        return order_data
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Order not found or API error: {e}")
