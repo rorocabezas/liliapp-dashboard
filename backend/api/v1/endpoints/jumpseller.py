@@ -135,3 +135,21 @@ def get_jumpseller_order_by_id(order_id: int):
         return order_data
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Order not found or API error: {e}")
+    
+
+@router.get("/products/{product_id}",
+            summary="Obtener un Producto de Jumpseller por ID",
+            tags=["Jumpseller API Explorer"])
+def get_jumpseller_product_by_id(product_id: int):
+    """
+    Endpoint para obtener los detalles completos de un producto específico desde Jumpseller.
+    """
+    try:
+        product_data = jumpseller_service.get_product_by_id(product_id)
+        return product_data
+    except Exception as e:
+        # Si _make_request lanza una excepción, la capturamos aquí
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Producto con ID {product_id} no encontrado en Jumpseller o error de API."
+        )

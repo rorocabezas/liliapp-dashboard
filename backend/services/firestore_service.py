@@ -480,3 +480,66 @@ def get_firestore_service_data_for_audit(service_id: str) -> dict:
     audit_data["subcategories"] = [doc.to_dict() for doc in subcategories_ref]
 
     return audit_data
+
+# ... (al final del archivo, en una nueva sección)
+
+def get_firestore_data_health_summary() -> dict:
+    """
+    Realiza un análisis completo de la salud y completitud de los datos en Firestore.
+    """
+    db = get_db_client()
+    summary = {
+        "collection_counts": {},
+        "user_health": {},
+        "service_health": {}
+    }
+
+    # 1. Conteos de Colecciones Principales
+    main_collections = ["users", "orders", "services", "categories"]
+    for col in main_collections:
+        # stream() es costoso para solo contar, pero es la forma más directa sin índices de conteo
+        docs = db.collection(col).stream()
+        summary["collection_counts"][col] = sum(1 for _ in docs)
+
+    # 2. Análisis de Salud de la Colección 'users'
+    users_ref = db.collection("users").stream()
+    all_users = list(users_ref)
+    total_users = len(all_users)
+    
+    if total_users > 0:
+        profiles_count = 0
+        profiles_with_rut = 0
+        addresses_subcollection_count = 0
+        total_addresses = 0
+        addresses_per_user = []
+
+        for user_doc in all_users:
+            profile_ref = user_doc.reference.collection("customer_profiles").limit(1).get()
+            if profile_ref:
+                profiles_count += 1
+                # Suponiendo que el profileId es el mismo que el userId
+                profile_data = user_doc.reference.collection("customer_profiles").document(user_doc.id).get()
+                if profile_data.exists and profile_data.to_dict().get("rut"):
+                    profiles_with_rut += 1
+
+                addresses_ref = user_doc.reference.collection("customer_profiles").document(user_doc.id).collection("addresses").stream()
+                user_addresses = list(addresses_ref)
+                if user_addresses:
+                    addresses_subcollection_count += 1
+                    num_addresses = len(user_addresses)
+                    total_addresses += num_addresses
+                    addresses_per_user.append(num_addresses)
+
+        summary["user_health"] = {
+            "total_users": total_users,
+            "with_customer_profile_percent": (profiles_count / total_users) * 100 if total_users > 0 else 0,
+            "profiles_with_rut_percent": (profiles_with_rut / profiles_count) * 100 if profiles_count > 0 else 0,
+            "with_addresses_subcollection_percent": (addresses_subcollection_count / profiles_count) * 100 if profiles_count > 0 else 0,
+            "avg_addresses_per_user": sum(addresses_per_user) / len(addresses_per_user) if addresses_per_user else 0,
+            "max_addresses_in_one_user": max(addresses_per_user) if addresses_per_user else 0
+        }
+
+    # 3. Análisis de Salud de la Colección 'services'
+    # (Se puede añadir una lógica similar para servicios, variantes, etc. si es necesario)
+    
+    return summary

@@ -46,6 +46,7 @@ st.markdown("---")
 # --- Gráfico de Tendencia Diaria ---
 st.subheader("Tendencia de Nuevos Usuarios por Día")
 daily_data = data.get('daily_new_users', {})
+
 if daily_data and daily_data.get('dates'):
     df_daily = pd.DataFrame(daily_data)
     df_daily['dates'] = pd.to_datetime(df_daily['dates'])

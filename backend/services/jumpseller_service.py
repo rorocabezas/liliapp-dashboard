@@ -167,3 +167,5 @@ def get_orders(limit: int = 50, page: int = 1, status: str = 'paid', order_id: i
 def get_product_by_id(product_id: int) -> Dict[str, Any]:
     """Obtiene un producto por su ID."""
     return _make_request(f"products/{product_id}")
+
+

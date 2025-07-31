@@ -49,3 +49,15 @@ def audit_service_data(service_id: int):
         "jumpseller_data": jumpseller_data.get("product", {}),
         "firestore_data": firestore_data
     }
+
+@router.get("/firestore-health", summary="Obtener un resumen de la salud de los datos en Firestore")
+def get_firestore_health():
+    """
+    Realiza un análisis de las colecciones principales, calcula conteos y
+    métricas de completitud de datos para 'users' y 'services'.
+    """
+    try:
+        summary = firestore_service.get_firestore_data_health_summary()
+        return summary
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al generar el resumen de salud: {e}")

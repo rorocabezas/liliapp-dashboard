@@ -64,20 +64,27 @@ def render_menu():
         st.markdown("---")
         
         #st.subheader("Análisis de Negocio")
-        #st.page_link("pages/adquisicion.py", label="Adquisición", icon="📈")
+        st.page_link("pages/adquisicion.py", label="Adquisición", icon="📈")
         #st.page_link("pages/engagement.py", label="Conversión", icon="🛒")
         #st.page_link("pages/operaciones.py", label="Operaciones", icon="⚙️")
         #st.page_link("pages/retencion.py", label="Retención", icon="💖")
         #st.page_link("pages/segmentacion.py", label="Segmentación", icon="🎯")
-        #st.page_link("pages/salud_tienda.py", label="Salud de la Tienda", icon="🩺")
+        st.page_link("pages/salud_tienda.py", label="Salud de la Tienda", icon="🩺")
         #st.markdown("---")
 
         st.subheader("Cargas de Datos ETL")
-        st.page_link("pages/cargas.py", label="ETL Masivo", icon="⚙️")
+
+        st.page_link("pages/cargas.py", label="ETL Masivo", icon="⚙️")       
+        st.page_link("pages/mapeo_jumpseller_a_servicio.py", label="Mapeo Jumpseller a Servicio", icon="🗺")
+        st.page_link("pages/Mapeo_Jumpseller_a_Cliente.py", label="Mapeo Jumpseller a Cliente", icon="🗺️")
+        st.markdown("---")
         st.page_link("pages/Mapeo_de_servicios.py", label="Mapeo de Servicios", icon="🛠️")
         st.page_link("pages/Mapeo_de_ordenes.py", label="Mapeo de Ordenes", icon="🔄")
-        st.page_link("pages/auditoria.py", label="Auditoría de Datos", icon="🔬")
+        #st.page_link("pages/Mapeo_Jumpseller_a_Usuario.py", label="Mapeo Jumpseller a Usuario", icon="🗺️")
         st.markdown("---")
+        st.page_link("pages/auditoria.py", label="Auditoría de Datos", icon="🔬")
+        st.page_link("pages/salud_firestore.py", label="Salud de Firestore", icon="🩺")
+        
 
         st.subheader("Datos Maestros")
         st.page_link("pages/servicios_crud.py", label="Servicios", icon="🛠️")

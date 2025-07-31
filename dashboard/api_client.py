@@ -164,3 +164,15 @@ def get_audit_data_for_order(order_id: int):
 def get_audit_data_for_service(service_id: int):
     """Obtiene los datos de auditoría para un servicio específico."""
     return _handle_request("GET", f"/audit/service/{service_id}")
+
+
+def get_firestore_health_summary():
+    """Obtiene el resumen de salud de datos de Firestore desde el backend."""
+    return _handle_request("GET", "/audit/firestore-health")
+
+
+def get_jumpseller_product_details(product_id: int):
+    """
+    Obtiene los detalles completos de un único producto desde el backend.
+    """
+    return _handle_request("GET", f"/jumpseller/products/{product_id}")
