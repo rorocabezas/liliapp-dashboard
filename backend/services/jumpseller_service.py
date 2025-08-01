@@ -169,3 +169,28 @@ def get_product_by_id(product_id: int) -> Dict[str, Any]:
     return _make_request(f"products/{product_id}")
 
 
+def stream_all_jumpseller_categories() -> Generator[str, None, None]:
+    """
+    Generador que obtiene TODAS las categorías de Jumpseller y las "produce" (yield)
+    en formato JSON-line, manejando la paginación.
+    """
+    page = 1
+    limit = 100
+    while True:
+        try:
+            params = {"limit": limit, "page": page}
+            categories_page = _make_request("categories", params=params)
+
+            if not categories_page:
+                break
+
+            for category_item in categories_page:
+                yield json.dumps(category_item) + "\n"
+
+            if len(categories_page) < limit:
+                break
+            
+            page += 1
+        except requests.exceptions.RequestException as e:
+            print(f"Error durante el streaming de categorías en la página {page}: {e}")
+            break

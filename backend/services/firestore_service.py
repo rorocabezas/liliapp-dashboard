@@ -543,3 +543,99 @@ def get_firestore_data_health_summary() -> dict:
     # (Se puede añadir una lógica similar para servicios, variantes, etc. si es necesario)
     
     return summary
+
+def add_item_to_service_array(service_id: str, array_name: str, item_data: dict):
+    """
+    Añade un nuevo item (variante o subcategoría) a un arreglo dentro de un documento de servicio.
+    Utiliza una operación atómica ArrayUnion.
+    """
+    db = get_db_client()
+    service_ref = db.collection('services').document(service_id)
+    
+    # Usamos ArrayUnion para añadir el item al arreglo de forma segura
+    service_ref.update({
+        array_name: firestore.ArrayUnion([item_data])
+    })
+    
+    # También actualizamos el flag booleano correspondiente
+    if array_name == "variants":
+        service_ref.update({"hasVariants": True})
+    elif array_name == "subcategories":
+        service_ref.update({"hasSubcategories": True})
+
+
+# ===================================================================
+# ===             FUNCIONES CRUD PARA COLECCIÓN 'customers'       ===
+# ===================================================================
+
+def get_all_customers() -> List[Dict[str, Any]]:
+    """Obtiene todos los documentos de la colección 'customers'."""
+    return get_all_documents("customers") # Reutilizamos la función genérica
+
+def get_customer(customer_id: str) -> Dict[str, Any]:
+    """Obtiene un único documento de la colección 'customers'."""
+    db = get_db_client()
+    doc = db.collection("customers").document(customer_id).get()
+    if doc.exists:
+        return {**doc.to_dict(), "id": doc.id}
+    return None
+
+def update_customer_main_fields(customer_id: str, data: Dict[str, Any]):
+    """Actualiza los campos de nivel superior de un documento de cliente."""
+    update_document("customers", customer_id, data) # Reutilizamos
+
+def add_address_to_customer(customer_id: str, address_data: Dict[str, Any]):
+    """Añade una nueva dirección al arreglo 'addresses' de un cliente."""
+    db = get_db_client()
+    customer_ref = db.collection('customers').document(customer_id)
+    customer_ref.update({
+        "addresses": firestore.ArrayUnion([address_data])
+    })
+
+def remove_address_from_customer(customer_id: str, address_data: Dict[str, Any]):
+    """Elimina una dirección del arreglo 'addresses' de un cliente."""
+    db = get_db_client()
+    customer_ref = db.collection('customers').document(customer_id)
+    customer_ref.update({
+        "addresses": firestore.ArrayRemove([address_data])
+    })
+
+
+def update_address_in_customer_array(customer_id: str, address_data: Dict[str, Any]):
+    """
+    Actualiza un objeto de dirección específico dentro del arreglo 'addresses' de un cliente.
+    """
+    db = get_db_client()
+    customer_ref = db.collection('customers').document(customer_id)
+    
+    # Obtenemos el documento actual del cliente
+    customer_doc = customer_ref.get()
+    if not customer_doc.exists:
+        raise ValueError(f"Cliente con ID {customer_id} no encontrado.")
+
+    customer_data = customer_doc.to_dict()
+    addresses = customer_data.get('addresses', [])
+    
+    # Buscamos la dirección por su ID y la actualizamos
+    address_id_to_update = address_data.get("id")
+    address_found = False
+    for i, addr in enumerate(addresses):
+        if addr.get("id") == address_id_to_update:
+            addresses[i] = address_data # Reemplazamos el objeto completo
+            address_found = True
+            break
+            
+    if not address_found:
+        raise ValueError(f"Dirección con ID {address_id_to_update} no encontrada para el cliente.")
+
+    # Reescribimos el arreglo completo de direcciones en el documento
+    customer_ref.update({"addresses": addresses})
+
+# También es buena idea tener una función para eliminar
+def delete_address_from_customer_array(customer_id: str, address_id: str):
+    """
+    Elimina un objeto de dirección del arreglo 'addresses' basado en su ID.
+    """
+    # Esta lógica es similar: leer, filtrar y reescribir.
+    # Por ahora, nos centraremos en la actualización.
+    pass

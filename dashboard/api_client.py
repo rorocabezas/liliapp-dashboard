@@ -124,16 +124,18 @@ def get_services():
 def get_categories():
     return _handle_request("GET", "/crud/categories")
 
-def get_service_components(service_id):
-    subcategories = _handle_request("GET", f"/crud/services/{service_id}/subcategories")
-    variants = _handle_request("GET", f"/crud/services/{service_id}/variants")
-    return subcategories or [], variants or []
+# get_service_components YA NO ES NECESARIA, la información viene en get_services()
 
 def create_document(endpoint: str, payload: dict):
     return _handle_request("POST", endpoint, json=payload)
 
-def update_service(service_id: str, payload: dict):
-    return _handle_request("PUT", f"/crud/services/{service_id}", json=payload)
+def add_subcategory_to_service(service_id: str, payload: dict):
+    """Añade una subcategoría a un servicio."""
+    return _handle_request("POST", f"/crud/services/{service_id}/subcategories", json=payload)
+
+def add_variant_to_service(service_id: str, payload: dict):
+    """Añade una variante a un servicio."""
+    return _handle_request("POST", f"/crud/services/{service_id}/variants", json=payload)
 
 
 def get_kpis_acquisition(start_date, end_date):
@@ -176,3 +178,38 @@ def get_jumpseller_product_details(product_id: int):
     Obtiene los detalles completos de un único producto desde el backend.
     """
     return _handle_request("GET", f"/jumpseller/products/{product_id}")
+
+
+# --- Funciones para el CRUD de Clientes (Modelo Desnormalizado) ---
+def get_customers():
+    """Obtiene todos los clientes de la colección 'customers'."""
+    return _handle_request("GET", "/crud/customers")
+
+def update_customer_fields(customer_id: str, payload: dict):
+    """Actualiza los campos principales de un cliente."""
+    return _handle_request("PUT", f"/crud/customers/{customer_id}", json=payload)
+
+def add_address(customer_id: str, payload: dict):
+    """Añade una nueva dirección al arreglo de un cliente."""
+    return _handle_request("POST", f"/crud/customers/{customer_id}/addresses", json=payload)
+
+def update_address(customer_id: str, address_id: str, payload: dict):
+    """Actualiza una dirección existente en el arreglo de un cliente."""
+    return _handle_request("PUT", f"/crud/customers/{customer_id}/addresses/{address_id}", json=payload)
+
+
+def get_all_jumpseller_categories():
+    """Obtiene TODAS las categorías desde el endpoint de streaming del backend."""
+    all_categories = []
+    endpoint = "/jumpseller/stream-categories"
+    url = f"{API_BASE_URL}{endpoint}"
+    try:
+        with requests.get(url, stream=True, timeout=120) as response:
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if line:
+                    all_categories.append(json.loads(line))
+        return all_categories
+    except Exception as e:
+        st.error(f"Error de API al cargar categorías: {e}")
+    return None

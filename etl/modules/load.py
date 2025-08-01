@@ -9,10 +9,11 @@ def get_db_client():
 # ===         FUNCIONES DE CARGA GENÉRICAS               ===
 # ==========================================================
 
-def load_data_to_firestore(collection_name: str, data: list, id_field: str, logger=st.info):
+def load_data_to_firestore(collection_name: str, data: list, id_field: str, logger=st.info, merge: bool = False):
     """
     Carga una lista de diccionarios a una colección de nivel superior en Firestore.
     Usa el valor de 'id_field' como el ID del documento.
+    Si merge=True, crea o actualiza el documento si ya existe (idempotente).
     """
     if not data:
         logger(f"🧘 No hay nuevos datos para cargar en '{collection_name}'.")
@@ -23,10 +24,8 @@ def load_data_to_firestore(collection_name: str, data: list, id_field: str, logg
     
     logger(f"🚀 Procesando '{collection_name}'... {len(data)} registros.")
     
-    created_count = 0
-    updated_count = 0
-    unchanged_count = 0
-
+    # Esta función ya no necesita contar, la dejamos más simple
+    # para set (crear/sobrescribir) o set con merge (crear/actualizar)
     for item in data:
         doc_id = str(item.get(id_field))
         if not doc_id:
@@ -34,20 +33,12 @@ def load_data_to_firestore(collection_name: str, data: list, id_field: str, logg
             continue
         
         doc_ref = db.collection(collection_name).document(doc_id)
-        # Aquí podrías añadir lógica para comparar con datos existentes si fuera necesario
-        # Por ahora, asumimos que son todos nuevos o se sobreescriben.
-        batch.set(doc_ref, item)
-        created_count += 1
+        batch.set(doc_ref, item, merge=merge)
 
     batch.commit()
     
-    summary = (
-        f"Resumen de Carga para '{collection_name}':\n"
-        f"✨ Creados: {created_count} | "
-        f"🔄 Actualizados: {updated_count} | "
-        f"🧘 Sin cambios: {unchanged_count}"
-    )
-    logger(summary)
+    action = "creados/actualizados" if merge else "creados/sobrescritos"
+    logger(f"✅ Carga de {len(data)} registros para '{collection_name}' completada ({action}).")
 
 # ==========================================================
 # ===         FUNCIONES DE CARGA ESPECÍFICAS             ===

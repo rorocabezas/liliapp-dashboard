@@ -238,3 +238,71 @@ def delete_variant(service_id: str, variant_id: str):
         return {"status": "success", "message": f"Variante {variant_id} eliminada."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+
+# --- Nuevos Endpoints para la gestión de arreglos en Servicios ---
+
+class SubcategoryPayload(BaseModel):
+    id: str
+    name: str
+
+class VariantPayload(BaseModel):
+    id: str
+    price: float
+    options: Dict[str, Any]
+    stock: int
+    sku: str = ""
+
+@router.post("/services/{service_id}/subcategories", summary="Añadir una subcategoría a un servicio")
+def add_subcategory_to_service(service_id: str, subcategory: SubcategoryPayload):
+    try:
+        firestore_service.add_item_to_service_array(service_id, "subcategories", subcategory.dict())
+        return {"status": "success", "message": f"Subcategoría añadida al servicio {service_id}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/services/{service_id}/variants", summary="Añadir una variante a un servicio")
+def add_variant_to_service(service_id: str, variant: VariantPayload):
+    try:
+        firestore_service.add_item_to_service_array(service_id, "variants", variant.dict())
+        return {"status": "success", "message": f"Variante añadida al servicio {service_id}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+
+
+@router.get("/customers", summary="Obtener todos los clientes")
+def get_all_customers_endpoint():
+    return firestore_service.get_all_customers()
+
+@router.get("/customers/{customer_id}", summary="Obtener un cliente por ID")
+def get_customer_endpoint(customer_id: str):
+    customer = firestore_service.get_customer(customer_id)
+    if not customer:
+        raise HTTPException(status_code=404, detail="Cliente no encontrado")
+    return customer
+
+@router.put("/customers/{customer_id}", summary="Actualizar datos de un cliente")
+def update_customer_endpoint(customer_id: str, data: Dict[str, Any]):
+    firestore_service.update_customer_main_fields(customer_id, data)
+    return {"status": "success"}
+
+@router.post("/customers/{customer_id}/addresses", summary="Añadir una dirección a un cliente")
+def add_address_endpoint(customer_id: str, address: Dict[str, Any]):
+    firestore_service.add_address_to_customer(customer_id, address)
+    return {"status": "success"}
+
+
+@router.put("/customers/{customer_id}/addresses/{address_id}", summary="Actualizar una dirección de un cliente")
+def update_address_endpoint(customer_id: str, address_id: str, address_data: Dict[str, Any]):
+    # Aseguramos que el ID en el payload coincida con el de la URL
+    if address_data.get("id") != address_id:
+        raise HTTPException(status_code=400, detail="El ID de la dirección en el payload no coincide con el de la URL.")
+    
+    try:
+        firestore_service.update_address_in_customer_array(customer_id, address_data)
+        return {"status": "success"}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

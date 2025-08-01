@@ -153,3 +153,17 @@ def get_jumpseller_product_by_id(product_id: int):
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Producto con ID {product_id} no encontrado en Jumpseller o error de API."
         )
+    
+
+
+@router.get("/stream-categories",
+            summary="Obtener todas las Categorías de Jumpseller (vía Streaming)",
+            tags=["Jumpseller API Explorer"])
+def stream_jumpseller_categories_endpoint():
+    """
+    Endpoint que obtiene todas las categorías de Jumpseller usando streaming.
+    """
+    return StreamingResponse(
+        jumpseller_service.stream_all_jumpseller_categories(),
+        media_type="application/x-json-stream"
+    )

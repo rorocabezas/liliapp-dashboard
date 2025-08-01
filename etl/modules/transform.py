@@ -280,3 +280,24 @@ def transform_products_for_service_model(source_products: List[Dict[str, Any]], 
     
     logger(f"✅ Transformación completada: {len(services_list)} servicios y {len(categories_list)} categorías únicas generadas.")
     return services_list, categories_list
+
+def transform_categories(source_categories: List[Dict[str, Any]], logger) -> List[Dict]:
+    """
+    Transforma la lista de categorías de Jumpseller al modelo de Firestore.
+    """
+    logger(f"🔄 Transformando {len(source_categories)} categorías...")
+    
+    transformed = []
+    for item in source_categories:
+        cat = item.get("category", {})
+        if not cat or not cat.get("id"):
+            continue
+            
+        transformed.append({
+            "id": str(cat.get("id")),
+            "name": cat.get("name"),
+            "description": cat.get("description") or "",
+        })
+        
+    logger(f"✅ Transformación de categorías completada.")
+    return transformed
