@@ -45,17 +45,75 @@ def _clean_html(raw_html: str) -> str:
 # ===================================================================
 
 def transform_single_product(product: Dict[str, Any]) -> Tuple[Dict, Dict, List[Dict], List[Dict]]:
-    if not product: return {}, {}, [], []
+    """
+    Transforma un producto al modelo Normalizado original, aplicando la lógica de negocio
+    refinada para la jerarquía de categorías.
+    """
+    if not product:
+        return {}, {}, [], []
+
     product_id = str(product.get("id"))
-    product_categories = product.get("categories", [])
+    product_categories_raw = product.get("categories", [])
+    
+    # Lógica de extracción de imagen segura
+    images = product.get("images", [])
+    image_url = images[0].get("url") if images and isinstance(images[0], dict) else None
+    
+    # --- LÓGICA DE CATEGORÍAS REFINADA ---
     category_id, category_data = None, None
-    if product_categories:
-        main_cat = product_categories[0]
+    subcategories_data = []
+
+    if len(product_categories_raw) >= 2:
+        # Caso ideal: hay jerarquía. Usamos la pos 1 como principal.
+        main_cat = product_categories_raw[1]
         category_id = str(main_cat.get("id"))
-        category_data = {"id": category_id, "name": main_cat.get("name", "Sin Categoría"), "description": main_cat.get("description") or "", "imageUrl": product.get("images", [{}])[0].get("url")}
-    subcategories_data = [{"id": str(sub_cat.get("id")), "serviceId": product_id, "name": sub_cat.get("name")} for sub_cat in product_categories[1:]]
-    variants_data = [{"id": str(v.get("id")), "serviceId": product_id, "price": v.get("price", 0.0), "options": v.get("options", [{}])[0], "sku": v.get("sku"), "stock": v.get("stock")} for v in product.get("variants", [])]
-    service_data = {"id": product_id, "name": product.get("name"), "description": _clean_html(product.get("description", "")), "categoryId": category_id, "price": product.get("price", 0.0), "status": 'active' if product.get("status") == 'available' else 'inactive', "createdAt": _parse_utc_string(product.get("created_at")), "hasVariants": len(variants_data) > 0, "hasSubcategories": len(subcategories_data) > 0, "stats": {"viewCount": 0, "purchaseCount": 0, "averageRating": 0.0}}
+        category_data = {
+            "id": category_id,
+            "name": main_cat.get("name", "N/A"),
+            "description": (main_cat.get("description") or "").strip(),
+            "imageUrl": image_url
+        }
+        # Si hay más de 2 categorías, a partir de la tercera son subcategorías
+        if len(product_categories_raw) > 2:
+            subcategories_data = [{"id": str(sub_cat.get("id")), "serviceId": product_id, "name": sub_cat.get("name")} for sub_cat in product_categories_raw[2:]]
+    elif len(product_categories_raw) == 1:
+        # Caso fallback: solo hay una categoría. La usamos como principal.
+        main_cat = product_categories_raw[0]
+        category_id = str(main_cat.get("id"))
+        category_data = {
+            "id": category_id,
+            "name": main_cat.get("name", "N/A"),
+            "description": (main_cat.get("description") or "").strip(),
+            "imageUrl": image_url
+        }
+
+    # Lógica de extracción de variantes
+    variants_data = []
+    for variant in product.get("variants", []):
+        options = variant.get("options", [{}])[0]
+        variants_data.append({
+            "id": str(variant.get("id")),
+            "serviceId": product_id,
+            "price": variant.get("price", 0.0),
+            "options": {"name": options.get("name"), "value": options.get("value")},
+            "sku": variant.get("sku"),
+            "stock": variant.get("stock")
+        })
+    
+    # Ensamblado del Documento de Servicio Final
+    service_data = {
+        "id": product_id,
+        "name": product.get("name"),
+        "description": _clean_html(product.get("description", "")),
+        "categoryId": category_id,
+        "price": product.get("price", 0.0),
+        "status": 'active' if product.get("status") == 'available' else 'inactive',
+        "createdAt": _parse_utc_string(product.get("created_at")),
+        "hasVariants": len(variants_data) > 0,
+        "hasSubcategories": len(subcategories_data) > 0, 
+        "stats": {"viewCount": 0, "purchaseCount": 0, "averageRating": 0.0}
+    }
+    
     return service_data, category_data, variants_data, subcategories_data
 
 def transform_single_order(order: Dict[str, Any]) -> Tuple[Dict, Dict, Dict, Dict]:
@@ -193,61 +251,74 @@ def transform_orders_for_customer_model(source_orders: List[Dict[str, Any]]) -> 
 
 def transform_product_to_service_model(product: Dict[str, Any]) -> Tuple[Dict, List[Dict]]:
     """
-    Transforma un producto de Jumpseller en un documento 'service' con referencias
-    anidadas (modelo híbrido) y una lista de las categorías únicas encontradas.
+    Transforma un producto al modelo 'Service-Híbrido', aplicando la lógica de negocio
+    refinada para la jerarquía de categorías.
     """
     if not product:
         return None, []
 
     product_id = str(product.get("id"))
-    
-    # --- Extraer Categoría Principal (solo referencia) ---
     product_categories_raw = product.get("categories", [])
+    
+    # --- LÓGICA DE CATEGORÍAS REFINADA ---
     category_reference = None
-    if product_categories_raw:
+    subcategories_references = []
+    
+    if len(product_categories_raw) >= 2:
+        # Caso ideal: hay jerarquía. Usamos la pos 1 como principal.
+        main_cat = product_categories_raw[1]
+        category_reference = {"id": str(main_cat.get("id"))}
+        # Si hay más de 2 categorías, a partir de la tercera son subcategorías
+        if len(product_categories_raw) > 2:
+            subcategories_references = [{"id": str(sub_cat.get("id"))} for sub_cat in product_categories_raw[2:]]
+    elif len(product_categories_raw) == 1:
+        # Caso fallback: solo hay una categoría. La usamos como principal.
         main_cat = product_categories_raw[0]
         category_reference = {"id": str(main_cat.get("id"))}
+        # No hay subcategorías en este caso.
 
-    # --- Extraer Subcategorías como un Arreglo de Referencias ---
-    subcategories_references = []
-    if len(product_categories_raw) > 1:
-        for sub_cat in product_categories_raw[1:]:
-            subcategories_references.append({"id": str(sub_cat.get("id"))})
-            
-    # --- Extraer Variantes (completamente anidadas) ---
+    # Lógica de extracción de variantes
     variants_array = []
     for variant in product.get("variants", []):
         options = variant.get("options", [{}])[0]
         variants_array.append({
-            "id": str(variant.get("id")), "price": variant.get("price", 0.0),
+            "id": str(variant.get("id")),
+            "price": variant.get("price", 0.0),
             "options": {"name": options.get("name"), "value": options.get("value")},
-            "sku": variant.get("sku"), "stock": variant.get("stock")
+            "sku": variant.get("sku"),
+            "stock": variant.get("stock")
         })
-    
-    # --- Ensamblar el Documento de Servicio Final ---
+
+    # Lógica de extracción de imagen segura
+    images = product.get("images", [])
+    image_url = images[0].get("url") if images and isinstance(images[0], dict) else None
+
+    # Ensamblado del Documento de Servicio Final
     service_payload = {
-        "id": product_id, "name": product.get("name"), "description": _clean_html(product.get("description", "")),
-        "price": product.get("price", 0.0), "status": 'active' if product.get("status") == 'available' else 'inactive',
-        "createdAt": _parse_utc_string(product.get("created_at")), "imageUrl": product.get("images", [{}])[0].get("url"),
-        
-        # --- Datos Anidados (Modelo Híbrido) ---
+        "id": product_id,
+        "name": product.get("name"),
+        "description": _clean_html(product.get("description", "")),
+        "price": product.get("price", 0.0),
+        "status": 'active' if product.get("status") == 'available' else 'inactive',
+        "createdAt": _parse_utc_string(product.get("created_at")),
+        "imageUrl": image_url,
         "category": category_reference,
         "subcategories": subcategories_references,
         "variants": variants_array,
-        
         "stats": {"viewCount": 0, "purchaseCount": 0, "averageRating": 0.0}
     }
     
-    # --- También devolvemos los documentos de categoría completos para la colección 'categories' ---
+    # Devolución de TODAS las categorías para la colección maestra
     categories_found = []
     for cat in product_categories_raw:
         categories_found.append({
             "id": str(cat.get("id")),
             "name": cat.get("name"),
-            "description": cat.get("description") or ""
+            "description": (cat.get("description") or "").strip()
         })
 
     return service_payload, categories_found
+
 
 # --- Función para Transformar Múltiples Productos al Modelo 'Service-Híbrido' ---
 def transform_products_for_service_model(source_products: List[Dict[str, Any]], logger) -> Tuple[List[Dict], List[Dict]]:

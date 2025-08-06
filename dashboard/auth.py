@@ -1,16 +1,14 @@
 # dashboard/auth.py
-
 import streamlit as st
 import requests
 from pathlib import Path
 
-API_URL = "http://127.0.0.1:8000"
+API_URL = "http://1227.0.0.1:8000"
 
 def handle_login(email, password):
     """
     Encapsula la lógica de llamada a la API para mantener el formulario limpio.
     """
-
     if not email or not password:
         st.warning("Por favor, ingresa tu email y contraseña.")
         return
@@ -85,10 +83,11 @@ def render_login_form():
 def check_login():
     """
     Función principal de autenticación. Gestiona el estado de la UI (sidebar).
+    
+    --- CAMBIO CRÍTICO ---
+    Esta función YA NO llama a st.set_page_config().
+    Su única responsabilidad es verificar la autenticación y renderizar la UI correspondiente.
     """
-    # Configuración inicial del sidebar, por defecto oculto
-    st.set_page_config(initial_sidebar_state="collapsed")
-
     if not st.session_state.get('authenticated', False):
         render_login_form()
         st.stop()

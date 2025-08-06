@@ -1,96 +1,88 @@
 # dashboard/pages/engagement.py
 import streamlit as st
-import requests
 import pandas as pd
 import plotly.express as px
-from pathlib import Path
-import sys
+from typing import Dict, List
 
-# --- Patrón de Importación Robusto ---
-project_root = Path(__file__).resolve().parents[2]
-if str(project_root) not in sys.path:
-    sys.path.append(str(project_root))
+# --- Importaciones de Módulos del Proyecto ---
+from dashboard.base_dashboard import BaseDashboard
+from dashboard.styles import metric_card, COLOR_PRIMARY, COLOR_SECONDARY, COLOR_WARNING
 
-# --- Importaciones de nuestro propio proyecto ---
-from dashboard.auth import check_login
-from dashboard.menu import render_menu
+class EngagementDashboard(BaseDashboard):
+    """
+    Dashboard de engagement y conversión que hereda de la clase base.
+    """
+    
+    def __init__(self):
+        super().__init__(page_title="Engagement y Conversión", page_icon="🛒", endpoint="engagement")
+    
+    def render_kpi_cards(self) -> None:
+        """Renderiza las tarjetas de KPIs específicas para Engagement."""
+        cols = st.columns(3)
+        with cols[0]:
+            metric_card("🛒", "Tasa de Abandono", f"{self.data.get('abandonment_rate', 0)}%", COLOR_WARNING, "card1")
+        with cols[1]:
+            metric_card("💰", "Ticket Promedio (AOV)", f"${self.data.get('aov_clp', 0):,.0f} CLP", COLOR_PRIMARY, "card2")
+        with cols[2]:
+            metric_card("🔁", "Frec. de Compra", f"{self.data.get('purchase_frequency', 0)} órd/cliente", COLOR_SECONDARY, "card3")
+        st.markdown("<br>", unsafe_allow_html=True)
 
-# --- Configuración de Página y Autenticación ---
-st.set_page_config(page_title="Conversión - LiliApp", layout="wide")
-check_login()
-render_menu()
+    def render_visualizations(self) -> None:
+        """Renderiza las visualizaciones específicas para Engagement."""
+        col1, col2 = st.columns(2)
+        with col1:
+            self._render_payment_pie_chart()
+        with col2:
+            # --- CAMBIO: Llamamos a la nueva función de renderizado ---
+            self._render_top_categories_chart()
 
-# --- Función para Cargar Datos desde la API ---
-@st.cache_data(ttl=3600)
-def load_engagement_data(start_date, end_date):
-    """Llama al endpoint /engagement de la API para obtener los datos."""
-    api_url = "http://127.0.0.1:8000/api/v1/kpis/engagement"
-    params = {"start_date": start_date, "end_date": end_date}
-    try:
-        response = requests.get(api_url, params=params)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        st.error(f"Error al conectar con la API: {e}")
-        return None
+    def _render_payment_pie_chart(self) -> None:
+        """Renderiza un gráfico de torta interactivo para los métodos de pago."""
+        st.subheader("💳 Distribución de Métodos de Pago")
+        payment_dist = self.data.get('payment_method_distribution', {})
+        if not payment_dist:
+            st.info("ℹ️ No hay datos de métodos de pago en este período."); return
+        df_payment = pd.DataFrame(list(payment_dist.items()), columns=['Método', 'Cantidad'])
+        fig = px.pie(df_payment, names='Método', values='Cantidad', hole=.4, color_discrete_sequence=px.colors.sequential.Teal)
+        fig.update_layout(margin=dict(l=0, r=0, t=40, b=0), legend_title_text='Métodos de Pago')
+        fig.update_traces(textposition='inside', textinfo='percent+label')
+        st.plotly_chart(fig, use_container_width=True)
 
-# --- Cuerpo del Dashboard ---
-st.title("🛒 Engagement y Conversión")
-st.markdown("Métricas clave del embudo de compra y comportamiento del usuario.")
-
-start_date, end_date = st.session_state.get('date_range', (None, None))
-
-if start_date and end_date:
-    with st.spinner("Cargando datos de engagement..."):
-        data = load_engagement_data(start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
-
-    if data:
-        # --- KPIs Principales en Columnas ---
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Ticket Promedio (AOV)", f"${data.get('aov_clp', 0):,}")
-        col2.metric("Tasa Abandono de Carrito", f"{data.get('abandonment_rate', 0)}%")
-        col3.metric("Frecuencia de Compra", f"{data.get('purchase_frequency', 0)}")
+    def _render_top_categories_chart(self) -> None:
+        """Renderiza un gráfico de barras para las categorías más vendidas por monto."""
+        # --- CAMBIO: Título actualizado ---
+        st.subheader("🏆 Top 5 Categorías por Ingresos")
+        # --- CAMBIO: Usamos la nueva clave 'top_categories' ---
+        top_categories = self.data.get('top_categories', [])
         
-        st.markdown("---")
+        if not top_categories:
+            st.info("ℹ️ No hay datos de ventas de categorías en este período."); return
 
-        # --- Gráficos en Columnas ---
-        col_graf_1, col_graf_2 = st.columns(2)
+        # --- CAMBIO: Las columnas ahora son 'name' y 'sales' ---
+        df_top = pd.DataFrame(top_categories).sort_values('sales', ascending=True)
+        
+        fig = px.bar(
+            df_top,
+            x='sales',
+            y='name',
+            orientation='h',
+            labels={'sales': 'Ingresos (CLP)', 'name': 'Categoría'},
+            text_auto=True,
+            color_discrete_sequence=[COLOR_PRIMARY]
+        )
+        fig.update_layout(
+            margin=dict(l=0, r=0, t=40, b=0),
+            xaxis_title=None, yaxis_title=None,
+            plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+            yaxis={'categoryorder':'total ascending'}
+        )
+        # Formateamos el texto para que muestre el signo peso y miles
+        fig.update_traces(texttemplate='$%{x:,.0f}', textposition='outside')
+        
+        st.plotly_chart(fig, use_container_width=True)
 
-        with col_graf_1:
-            st.subheader("Rendimiento de Servicios (Top 5)")
-            service_data = data.get('service_performance', [])
-            if service_data:
-                df_services = pd.DataFrame(service_data)
-                fig_bar = px.bar(
-                    df_services, 
-                    x='purchases', 
-                    y='name', 
-                    orientation='h',
-                    title="Servicios más Comprados",
-                    text='purchases'
-                )
-                fig_bar.update_layout(yaxis_title="Servicio", xaxis_title="N° de Compras")
-                fig_bar.update_traces(marker_color='#6d28d9', textposition='outside')
-                st.plotly_chart(fig_bar, use_container_width=True)
-            else:
-                st.info("No hay datos de rendimiento de servicios para mostrar.")
 
-        with col_graf_2:
-            st.subheader("Distribución de Métodos de Pago")
-            payment_data = data.get('payment_method_distribution', {})
-            if payment_data:
-                df_payments = pd.DataFrame(list(payment_data.items()), columns=['Método de Pago', 'Cantidad'])
-                fig_pie = px.pie(
-                    df_payments, 
-                    names='Método de Pago', 
-                    values='Cantidad', 
-                    title="Uso de Métodos de Pago en Órdenes Completadas",
-                    hole=0.4
-                )
-                st.plotly_chart(fig_pie, use_container_width=True)
-            else:
-                st.info("No hay datos de métodos de pago para mostrar.")
-    else:
-        st.error("No se pudieron cargar los datos para el período seleccionado.")
-else:
-    st.warning("Por favor, selecciona un rango de fechas para ver los datos.")
+# --- Punto de Entrada Principal ---
+if __name__ == "__main__":
+    dashboard = EngagementDashboard()
+    dashboard.run()

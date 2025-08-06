@@ -1,84 +1,68 @@
 # dashboard/pages/operaciones.py
-
 import streamlit as st
-import requests
 import pandas as pd
 import plotly.express as px
-from pathlib import Path
-import sys
 
-# --- Patrón de Importación Robusto ---
-project_root = Path(__file__).resolve().parents[2]
-if str(project_root) not in sys.path:
-    sys.path.append(str(project_root))
-
+# --- Importaciones de Módulos del Proyecto ---
 from dashboard.auth import check_login
 from dashboard.menu import render_menu
+from dashboard.api_client import get_kpis
 
-# --- Configuración de Página y Autenticación ---
-st.set_page_config(page_title="Operaciones - LiliApp", layout="wide")
+# --- Configuración de Página ---
+st.set_page_config(page_title="Operaciones - LiliApp BI", layout="wide", initial_sidebar_state="expanded")
 check_login()
 render_menu()
 
-# --- Función para Cargar Datos desde la API ---
-@st.cache_data(ttl=3600)
-def load_operations_data(start_date, end_date):
-    """Llama al endpoint /operations de la API para obtener los datos."""
-    api_url = "http://127.0.0.1:8000/api/v1/kpis/operations"
-    params = {"start_date": start_date, "end_date": end_date}
-    try:
-        response = requests.get(api_url, params=params)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        st.error(f"Error al conectar con la API: {e}")
-        return None
+st.title("⚙️ Análisis de Operaciones y Calidad")
+st.markdown("Métricas sobre la eficiencia de nuestros procesos, la carga de trabajo y la satisfacción del cliente.")
 
-# --- Cuerpo del Dashboard ---
-st.title("⚙️ Operaciones y Calidad del Servicio")
-st.markdown("Métricas sobre la eficiencia y la calidad de la ejecución de servicios.")
+# --- Filtros y Carga de Datos ---
+if 'date_range' not in st.session_state or len(st.session_state.date_range) != 2:
+    st.warning("Selecciona un rango de fechas en el menú."); st.stop()
 
-start_date, end_date = st.session_state.get('date_range', (None, None))
+start_date_obj, end_date_obj = st.session_state.date_range
+start_date_str, end_date_str = start_date_obj.strftime('%Y-%m-%d'), end_date_obj.strftime('%Y-%m-%d')
 
-if start_date and end_date:
-    with st.spinner("Cargando datos de operaciones..."):
-        data = load_operations_data(start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
+@st.cache_data(ttl=300)
+def load_data(start, end):
+    return get_kpis("operations", start, end)
 
-    if data:
-        # --- KPIs Principales en Columnas ---
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Tiempo de Ciclo Promedio", f"{data.get('avg_cycle_time_days', 0)} días", help="Desde el pago hasta la finalización del servicio.")
-        col2.metric("Tasa de Cancelación", f"{data.get('cancellation_rate', 0)}%")
-        col3.metric("Satisfacción Promedio", f"{data.get('avg_rating', 0)} ⭐")
-        
-        st.markdown("---")
+data = load_data(start_date_str, end_date_str)
 
-        # --- Gráficos en Columnas ---
-        col_graf_1, col_graf_2 = st.columns(2)
+if not data:
+    st.error("No se pudieron cargar los datos. Verifica el backend y la base de datos."); st.stop()
 
-        with col_graf_1:
-            st.subheader("Distribución de Órdenes por Comuna (Top 10)")
-            commune_data = data.get('orders_by_commune', {})
-            if commune_data:
-                df_communes = pd.DataFrame(list(commune_data.items()), columns=['Comuna', 'Órdenes']).sort_values(by='Órdenes', ascending=False).head(10)
-                fig_bar = px.bar(df_communes, x='Órdenes', y='Comuna', orientation='h', text_auto=True)
-                fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
-                fig_bar.update_traces(marker_color='#6d28d9')
-                st.plotly_chart(fig_bar, use_container_width=True)
-            else:
-                st.info("No hay datos de órdenes por comuna para mostrar.")
+# --- Visualización de KPIs ---
+st.subheader(f"Resumen del Período: {start_date_obj.strftime('%d/%m/%Y')} al {end_date_obj.strftime('%d/%m/%Y')}")
 
-        with col_graf_2:
-            st.subheader("Distribución de Órdenes por Hora del Día")
-            hour_data = data.get('orders_by_hour', [])
-            if any(h > 0 for h in hour_data): # Comprueba si hay algún dato
-                df_hours = pd.DataFrame({'Hora': range(24), 'Órdenes': hour_data})
-                fig_line = px.line(df_hours, x='Hora', y='Órdenes', title="Horas Pico de Creación de Órdenes")
-                fig_line.update_traces(line_color='#FF4B4B', line_width=3)
-                st.plotly_chart(fig_line, use_container_width=True)
-            else:
-                st.info("No hay datos de órdenes por hora para mostrar.")
+cols_kpi = st.columns(2)
+cols_kpi[0].metric("🚫 Tasa de Cancelación", f"{data.get('cancellation_rate', 0)}%")
+cols_kpi[1].metric("⭐ Calificación Promedio", f"{data.get('avg_rating', 0):.2f} / 5.0")
+st.markdown("---")
+
+# --- Gráficos Detallados ---
+col1, col2 = st.columns(2)
+
+with col1:
+    st.subheader("📍 Órdenes Completadas por Comuna")
+    orders_by_commune = data.get('orders_by_commune', {})
+    if orders_by_commune:
+        df_commune = pd.DataFrame(list(orders_by_commune.items()), columns=['Comuna', 'Nº de Órdenes']).sort_values('Nº de Órdenes', ascending=False).head(10)
+        st.bar_chart(df_commune.set_index('Comuna'), use_container_width=True)
     else:
-        st.error("No se pudieron cargar los datos para el período seleccionado.")
-else:
-    st.warning("Por favor, selecciona un rango de fechas para ver los datos.")
+        st.info("No hay datos de órdenes por comuna en este período.")
+
+with col2:
+    st.subheader("⏰ Distribución de Órdenes por Hora del Día")
+    orders_by_hour = data.get('orders_by_hour', [])
+    if orders_by_hour and sum(orders_by_hour) > 0:
+        # Creamos un DataFrame con las 24 horas del día
+        df_hour = pd.DataFrame({
+            'Hora': range(24),
+            'Nº de Órdenes': orders_by_hour
+        })
+        fig = px.line(df_hour, x='Hora', y='Nº de Órdenes', title="Demanda Horaria", markers=True)
+        fig.update_layout(xaxis_title="Hora del día (0-23)", yaxis_title="Cantidad de Órdenes")
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No hay datos de órdenes por hora en este período.")

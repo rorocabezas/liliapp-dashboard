@@ -4,6 +4,7 @@ from fastapi import FastAPI
 import firebase_admin
 from firebase_admin import credentials
 
+
 # 1. Importa la instancia de configuración
 from backend.core.config import settings
 from backend.api.v1.endpoints import kpis, auth, crud, jumpseller, audit

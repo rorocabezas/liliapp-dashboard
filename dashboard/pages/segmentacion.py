@@ -1,99 +1,80 @@
 # dashboard/pages/segmentacion.py
-
 import streamlit as st
-import requests
 import pandas as pd
 import plotly.express as px
-from pathlib import Path
-import sys
 
-# --- Patrón de Importación Robusto ---
-project_root = Path(__file__).resolve().parents[2]
-if str(project_root) not in sys.path:
-    sys.path.append(str(project_root))
-
+# --- Importaciones ---
 from dashboard.auth import check_login
 from dashboard.menu import render_menu
+from dashboard.api_client import get_kpis
 
-# --- Configuración de Página y Autenticación ---
-st.set_page_config(page_title="Segmentación - LiliApp", layout="wide")
+# --- Configuración de Página ---
+st.set_page_config(page_title="Segmentación - LiliApp BI", layout="wide", initial_sidebar_state="expanded")
 check_login()
 render_menu()
 
-# --- Función para Cargar Datos desde la API ---
-@st.cache_data(ttl=3600)
-def load_segmentation_data(end_date):
-    """Llama al endpoint /segmentation de la API para obtener los datos."""
-    api_url = "http://127.0.0.1:8000/api/v1/kpis/segmentation"
-    params = {"end_date": end_date}
-    try:
-        response = requests.get(api_url, params=params)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        st.error(f"Error al conectar con la API: {e}")
-        return None
+st.title("🎯 Segmentación de Clientes (RFM)")
+st.markdown("Análisis de Recencia, Frecuencia y Valor Monetario para agrupar clientes en segmentos accionables.")
 
-# --- Cuerpo del Dashboard ---
-st.title("🎯 Segmentación y Marketing")
-st.markdown("Análisis RFM para agrupar clientes según su comportamiento de compra.")
+# --- Filtros y Carga de Datos ---
+if 'date_range' not in st.session_state or len(st.session_state.date_range) != 2:
+    st.warning("Selecciona un rango de fechas en el menú."); st.stop()
 
-_, end_date = st.session_state.get('date_range', (None, None))
+start_date_obj, end_date_obj = st.session_state.date_range
+start_date_str, end_date_str = start_date_obj.strftime('%Y-%m-%d'), end_date_obj.strftime('%Y-%m-%d')
 
-if end_date:
-    with st.spinner("Realizando análisis RFM... Este proceso puede tardar un momento."):
-        data = load_segmentation_data(end_date.strftime('%Y-%m-%d'))
+@st.cache_data(ttl=300)
+def load_data(start, end):
+    return get_kpis("segmentation", start, end)
 
-    if data and data.get('segment_distribution'):
-        # --- Gráfico de Distribución de Segmentos ---
-        st.subheader("Distribución de Clientes por Segmento")
-        
-        segment_data = data.get('segment_distribution', {})
-        df_segments = pd.DataFrame(list(segment_data.items()), columns=['Segmento', 'Número de Clientes'])
-        
-        fig = px.treemap(
-            df_segments, 
-            path=[px.Constant("Todos los Clientes"), 'Segmento'], 
-            values='Número de Clientes',
-            color='Número de Clientes',
-            color_continuous_scale='Purples'
-        )
-        fig.update_layout(margin = dict(t=50, l=25, r=25, b=25))
-        st.plotly_chart(fig, use_container_width=True)
-        
-        st.markdown("---")
+data = load_data(start_date_str, end_date_str)
 
-        # --- Explorador de Segmentos ---
-        st.subheader("Explorar Segmentos de Clientes")
-        
-        sample_data = data.get('sample_customers', {})
-        
-        # Creamos un selectbox para que el usuario elija un segmento
-        segment_to_show = st.selectbox(
-            "Selecciona un segmento para ver una muestra de clientes:",
-            options=list(sample_data.keys())
-        )
-        
-        if segment_to_show:
-            st.write(f"**Muestra de clientes en el segmento '{segment_to_show}':**")
-            
-            customers_in_segment = sample_data[segment_to_show]
-            df_sample = pd.DataFrame(customers_in_segment)
-            
-            # Mostramos la tabla con los datos RFM
-            st.dataframe(
-                df_sample[['customerId', 'recency', 'frequency', 'monetary', 'segment']],
-                use_container_width=True,
-                column_config={
-                    "customerId": "ID Cliente",
-                    "recency": st.column_config.NumberColumn("Recencia (días)", help="Días desde la última compra"),
-                    "frequency": st.column_config.NumberColumn("Frecuencia", help="Número total de compras"),
-                    "monetary": st.column_config.NumberColumn("Valor Monetario (CLP)", format="$ %d")
-                }
-            )
-            st.info("Utiliza esta lista para campañas de marketing dirigidas, como enviar un cupón de reactivación a los clientes 'En Riesgo'.", icon="💡")
+if not data:
+    st.error("No se pudieron cargar los datos. Verifica el backend y la base de datos."); st.stop()
 
-    else:
-        st.error("No se pudieron cargar los datos de segmentación.")
-else:
-    st.warning("Por favor, selecciona un rango de fechas para ver los datos.")
+# --- Visualización del Dashboard ---
+st.subheader(f"Análisis sobre órdenes completadas entre el {start_date_obj.strftime('%d/%m/%Y')} y el {end_date_obj.strftime('%d/%m/%Y')}")
+
+segment_dist = data.get("segment_distribution", {})
+
+if not segment_dist:
+    st.info("No hay suficientes datos de órdenes en este período para generar segmentos RFM.")
+    st.stop()
+
+# --- Gráfico de Distribución de Segmentos ---
+st.subheader("Distribución de Clientes por Segmento")
+df_dist = pd.DataFrame(list(segment_dist.items()), columns=['Segmento', 'Número de Clientes'])
+fig = px.bar(df_dist, x='Segmento', y='Número de Clientes', 
+             title="Clientes por Segmento RFM", text_auto=True,
+             color='Segmento', color_discrete_map={
+                 '🏆 Campeones': 'gold', '💖 Leales': 'royalblue',
+                 '😮 En Riesgo': 'darkorange', '❄️ Hibernando': 'lightskyblue', 'Otros': 'grey'
+             })
+fig.update_layout(showlegend=False)
+st.plotly_chart(fig, use_container_width=True)
+
+st.markdown("---")
+
+# --- Muestra de Clientes por Segmento ---
+st.subheader("Muestra de Clientes por Segmento")
+st.caption("Una vista detallada de algunos clientes en cada grupo para entender su comportamiento.")
+
+sample_customers = data.get("sample_customers", {})
+for segment, customers in sample_customers.items():
+    with st.expander(f"**{segment}** ({segment_dist.get(segment, 0)} clientes)"):
+        if customers:
+            df_sample = pd.DataFrame(customers)
+            st.dataframe(df_sample, use_container_width=True, hide_index=True)
+        else:
+            st.write("No hay clientes de muestra para este segmento.")
+
+# --- Explicación de los Segmentos ---
+st.markdown("---")
+st.subheader("📖 ¿Qué significa cada segmento?")
+st.markdown("""
+- **🏆 Campeones:** Tus mejores clientes. Compraron recientemente, compran a menudo y gastan más. ¡Hay que fidelizarlos!
+- **💖 Leales:** Clientes que compran con buena frecuencia. Responden bien a programas de lealtad.
+- **😮 En Riesgo:** Compraron bastante y gastaron bien, pero **hace mucho tiempo que no vuelven**. ¡Necesitan una campaña de reactivación!
+- **❄️ Hibernando:** Clientes de bajo valor que compraron hace mucho. Podrían perderse si no se les contacta.
+- **Otros:** Clientes que no encajan claramente en los segmentos principales.
+""")

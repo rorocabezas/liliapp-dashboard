@@ -1,329 +1,298 @@
+# backend/services/firestore_service.py
 import pandas as pd
 import traceback
 from firebase_admin import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
-from firebase_admin.firestore import Query
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any
+
 
 # ===================================================================
 # ===               HELPER & UTILITY FUNCTIONS                    ===
 # ===================================================================
+COMMUNE_COORDS = {
+    # Coordenadas aproximadas para algunas comunas de la RM.
+    # En un sistema de producción, esto podría venir de una base de datos o un archivo de configuración.
+    "Santiago": [-33.4372, -70.6506],
+    "Providencia": [-33.4216, -70.6083],
+    "Las Condes": [-33.4167, -70.5667],
+    "Vitacura": [-33.3916, -70.5542],
+    "La Reina": [-33.4478, -70.5367],
+    "Ñuñoa": [-33.4542, -70.6022],
+    "Huechuraba": [-33.3667, -70.65],
+    "No especificada": [-33.45, -70.6667] # Coordenada genérica para Santiago
+}
 
 def get_db_client():
     """Obtiene el cliente de Firestore de forma segura después de la inicialización."""
     return firestore.client()
 
+def _get_completed_orders_in_range(start_date: datetime, end_date: datetime) -> List[Dict[str, Any]]:
+    """Función de ayuda para obtener todas las órdenes completadas en un rango de fechas."""
+    db = get_db_client()
+    orders_query = db.collection('orders').where(filter=FieldFilter('status', '==', 'completed')).where(filter=FieldFilter('createdAt', '>=', start_date)).where(filter=FieldFilter('createdAt', '<=', end_date))
+    return [doc.to_dict() for doc in orders_query.stream()]
+
 def get_user_role(uid: str) -> str:
     """Obtiene el rol (accountType) de un usuario desde su documento en Firestore."""
     db = get_db_client()
     try:
+        # Asumiendo que aún se necesita una colección 'users' para la autenticación
         user_doc = db.collection('users').document(uid).get()
         if user_doc.exists:
             return user_doc.to_dict().get('accountType', 'customer')
     except Exception as e:
         print(f"Error al obtener el rol del usuario {uid}: {e}")
     return 'customer'
-
-# ===================================================================
-# ===        FUNCIONES PARA LA PÁGINA 'RESUMEN EJECUTIVO'         ===
-# ===================================================================
-
-def get_summary_kpis(start_date: datetime, end_date: datetime) -> Dict[str, Any]:
-    """Calcula los KPIs principales para el resumen ejecutivo."""
-    db = get_db_client()
     
-    users_query = db.collection('users').where(filter=FieldFilter('createdAt', '>=', start_date)).where(filter=FieldFilter('createdAt', '<=', end_date))
-    new_users_count = len(list(users_query.stream()))
-
-    orders_query = db.collection('orders').where(filter=FieldFilter('status', '==', 'completed')).where(filter=FieldFilter('createdAt', '>=', start_date)).where(filter=FieldFilter('createdAt', '<=', end_date))
-    orders_docs = list(orders_query.stream())
-    
-    total_revenue = sum(doc.to_dict().get('total', 0) for doc in orders_docs)
-    aov_clp = total_revenue / len(orders_docs) if orders_docs else 0
-    conversion_rate = get_cart_abandonment_rate(start_date, end_date, return_conversion=True)
-
-    if orders_docs:
-        sales_data = [{'date': doc.to_dict()['createdAt'], 'sales': doc.to_dict()['total']} for doc in orders_docs]
-        df = pd.DataFrame(sales_data)
-        df['date'] = pd.to_datetime(df['date']).dt.date
-        daily_sales = df.groupby('date')['sales'].sum().reset_index()
-        time_series = {"dates": [d.strftime('%Y-%m-%d') for d in daily_sales['date']], "sales": daily_sales['sales'].tolist()}
-    else:
-        time_series = {"dates": [], "sales": []}
-
-    return {
-        "new_users": new_users_count, "aov_clp": aov_clp,
-        "conversion_rate": round(conversion_rate, 2), "time_series_data": time_series
-    }
-
 # ===================================================================
-# ===         FUNCIONES PARA LA PÁGINA DE ADQUISICIÓN             ===
+# ===                   FUNCIONES DE CÁLCULO DE KPIs              ===
 # ===================================================================
 
-def get_all_documents_from_subcollection(main_collection_name: str, subcollection_name: str) -> list:
+def get_acquisition_kpis(start_date: datetime, end_date: datetime) -> Dict[str, Any]:
     """
-    Obtiene todos los docs de una subcolección y enriquece cada uno
-    con el ID de su documento padre como 'userId'.
+    Calcula KPIs de adquisición, incluyendo una serie de tiempo diaria robusta y
+    datos enriquecidos por comuna para el mapa de calor.
     """
     db = get_db_client()
-    all_docs = []
-    main_collection_ref = db.collection(main_collection_name)
-    for doc in main_collection_ref.stream():
-        # Obtenemos el ID del documento padre (ej: el ID del usuario)
-        parent_id = doc.id
-        subcollection_ref = doc.reference.collection(subcollection_name)
-        for sub_doc in subcollection_ref.stream():
-            # Convertimos el subdocumento a diccionario
-            sub_doc_data = sub_doc.to_dict()
-            # Agregamos el ID del documento padre
-            sub_doc_data['userId'] = parent_id
-            all_docs.append(sub_doc_data)
-    return all_docs
-
-def get_acquisition_kpis(date_range_start: datetime, date_range_end: datetime) -> dict:
-    """
-    Calcula KPIs de adquisición, incluyendo una serie de tiempo diaria de nuevos usuarios.
-    """
-    print("\n--- Iniciando cálculo de KPIs de Adquisición (con series de tiempo) ---")
     try:
-        print("Paso 1: Obteniendo documentos de 'users' y 'customer_profiles'...")
-        users_docs = get_all_documents("users")
-        profiles_docs = get_all_documents_from_subcollection("users", "customer_profiles")
-
-        if not users_docs:
-            print("  -> Advertencia: No se encontraron documentos en 'users'.")
-            return {"new_users": 0, "onboarding_rate": 0, "acquisition_by_region": {}, "daily_new_users": {}}
-        print(f"  -> Obtenidos {len(users_docs)} users y {len(profiles_docs)} profiles.")
-
-        print("Paso 3: Creando DataFrames de Pandas...")
-        df_users = pd.DataFrame(users_docs)
-        df_profiles = pd.DataFrame(profiles_docs) if profiles_docs else pd.DataFrame(columns=['userId', 'primaryAddressRegion'])
-        print("  -> DataFrames creados exitosamente.")
-
-        print(f"Paso 4: Filtrando usuarios por rango de fechas: {date_range_start.date()} a {date_range_end.date()}")
-        if 'createdAt' not in df_users.columns:
-            raise ValueError("La columna 'createdAt' no existe en los documentos de 'users'.")
-            
-        df_users['createdAt'] = pd.to_datetime(df_users['createdAt'], errors='coerce').dt.tz_convert('UTC')
-        df_users.dropna(subset=['createdAt'], inplace=True)
-
-        mask = (df_users['createdAt'] >= date_range_start) & (df_users['createdAt'] <= date_range_end)
-        df_filtered_users = df_users.loc[mask].copy()
-        new_users_count = len(df_filtered_users)
+        customers_query = db.collection('customers').where(filter=FieldFilter('createdAt', '>=', start_date)).where(filter=FieldFilter('createdAt', '<=', end_date))
+        customers_docs = [doc.to_dict() for doc in customers_query.stream()]
         
-        if new_users_count == 0:
-            print("--- Cálculo finalizado: No hay nuevos usuarios en el período. ---")
-            return {"new_users": 0, "onboarding_rate": 0, "acquisition_by_region": {}, "daily_new_users": {"dates": [], "counts": []}}
-        
-        print(f"  -> {new_users_count} usuarios encontrados en el rango de fechas.")
-
-        print("Paso 5: Calculando serie de tiempo diaria...")
-        df_filtered_users['signup_date'] = pd.to_datetime(df_filtered_users['createdAt']).dt.date
-        daily_counts = df_filtered_users.groupby('signup_date').size()
-        
-        full_date_range = pd.date_range(start=date_range_start.date(), end=date_range_end.date())
-        daily_counts = daily_counts.reindex(full_date_range.date, fill_value=0)
-
-        
-        datetime_index = pd.to_datetime(daily_counts.index)
-        daily_new_users_series = {
-            "dates": datetime_index.strftime('%Y-%m-%d').tolist(), 
-            "counts": daily_counts.values.tolist()
-        }
-        print("  -> Serie de tiempo calculada.")
-        
-        print("Paso 6: Calculando KPIs restantes...")
-        if 'onboardingCompleted' not in df_filtered_users.columns:
-            df_filtered_users['onboardingCompleted'] = False
-        df_filtered_users['onboardingCompleted'] = df_filtered_users['onboardingCompleted'].fillna(False)
-        completed_onboarding = df_filtered_users['onboardingCompleted'].sum()
-        onboarding_rate = (completed_onboarding / new_users_count) * 100
-        print(f"  -> Tasa de Onboarding: {onboarding_rate:.2f}%")
-            
-        if not df_profiles.empty:
-            df_merged = pd.merge(df_filtered_users, df_profiles, left_on='id', right_on='userId', how='left')
-            acquisition_by_region = df_merged['primaryAddressRegion'].fillna('No especificada').value_counts().to_dict()
-        else:
-            acquisition_by_region = {}
-        print(f"  -> Adquisición por Región: {acquisition_by_region}")
-
+        # --- Inicializar la estructura de respuesta ---
         result = {
-            "new_users": new_users_count,
-            "onboarding_rate": round(onboarding_rate, 2),
-            "acquisition_by_region": acquisition_by_region,
-            "daily_new_users": daily_new_users_series
+            "new_customers": 0,
+            "onboarding_rate": 0,
+            "acquisition_by_commune": [],
+            "daily_new_users": {"dates": [], "counts": []}
         }
-        print("--- Cálculo de KPIs finalizado con éxito. ---")
+        
+        # Si no hay nuevos clientes en el período, devolvemos la estructura vacía
+        if not customers_docs:
+            return result
+
+        df_customers = pd.DataFrame(customers_docs)
+        new_customers_count = len(df_customers)
+        result["new_customers"] = new_customers_count
+
+        # --- Cálculo de Tasa de Onboarding ---
+        if 'onboardingCompleted' in df_customers.columns:
+            completed_onboarding = df_customers['onboardingCompleted'].fillna(False).sum()
+            onboarding_rate = (completed_onboarding / new_customers_count) * 100 if new_customers_count > 0 else 0
+            result["onboarding_rate"] = round(onboarding_rate, 2)
+
+        # --- Cálculo de Adquisición por Comuna (para el mapa) ---
+        if 'addresses' in df_customers.columns:
+            df_customers['primaryCommune'] = df_customers['addresses'].apply(
+                lambda addrs: addrs[0].get('commune') if isinstance(addrs, list) and len(addrs) > 0 and addrs[0].get('commune') else 'No especificada'
+            )
+            acquisition_by_commune_counts = df_customers['primaryCommune'].value_counts().reset_index()
+            acquisition_by_commune_counts.columns = ['commune', 'count']
+
+            # Enriquecer con coordenadas geográficas
+            acquisition_by_commune_counts['lat'] = acquisition_by_commune_counts['commune'].map(lambda x: COMMUNE_COORDS.get(x, COMMUNE_COORDS["No especificada"])[0])
+            acquisition_by_commune_counts['lon'] = acquisition_by_commune_counts['commune'].map(lambda x: COMMUNE_COORDS.get(x, COMMUNE_COORDS["No especificada"])[1])
+            
+            result["acquisition_by_commune"] = acquisition_by_commune_counts.to_dict('records')
+
+        # --- Cálculo de Serie de Tiempo Diaria ---
+        if 'createdAt' in df_customers.columns:
+            df_customers['signup_date'] = pd.to_datetime(df_customers['createdAt'], utc=True).dt.date
+            daily_counts = df_customers.groupby('signup_date').size()
+            
+            # Crear un rango de fechas completo para rellenar los días sin registros
+            full_date_range = pd.date_range(start=start_date.date(), end=end_date.date())
+            daily_counts = daily_counts.reindex(full_date_range.date, fill_value=0)
+            
+            datetime_index = pd.to_datetime(daily_counts.index)
+            result["daily_new_users"] = {
+                "dates": datetime_index.strftime('%Y-%m-%d').tolist(),
+                "counts": daily_counts.values.tolist()
+            }
+            
         return result
-
+        
     except Exception as e:
-        print(f"!!! ERROR CATASTRÓFICO en get_acquisition_kpis: {repr(e)}")
+        print(f"!!! ERROR en get_acquisition_kpis: {repr(e)}")
         traceback.print_exc()
-        return {}
-
-# ===================================================================
-# ===       FUNCIONES PARA LA PÁGINA DE ENGAGEMENT Y CONVERSIÓN   ===
-# ===================================================================
+        return {} # Devolvemos un diccionario vacío en caso de error catastrófico
 
 def get_engagement_kpis(start_date: datetime, end_date: datetime) -> Dict[str, Any]:
-    """Calcula todos los KPIs relacionados con el engagement y la conversión."""
+    """
+    Calcula KPIs de engagement, con un análisis de Top Categorías en lugar de Top Servicios.
+    """
     db = get_db_client()
-    orders_query = db.collection('orders').where(filter=FieldFilter('status', '==', 'completed')).where(filter=FieldFilter('createdAt', '>=', start_date)).where(filter=FieldFilter('createdAt', '<=', end_date))
-    completed_orders_docs = list(orders_query.stream())
+    completed_orders_docs = _get_completed_orders_in_range(start_date, end_date)
     
-    abandonment_rate = get_cart_abandonment_rate(start_date, end_date)
-
-    if not completed_orders_docs:
-        return {"aov_clp": 0, "purchase_frequency": 0, "payment_method_distribution": {}, "abandonment_rate": abandonment_rate, "service_performance": []}
-
-    total_revenue = sum(doc.to_dict().get('total', 0) for doc in completed_orders_docs)
-    order_count = len(completed_orders_docs)
-    distinct_customers = len(set(doc.to_dict().get('customerId') for doc in completed_orders_docs))
-
-    aov_clp = total_revenue / order_count if order_count > 0 else 0
-    purchase_frequency = order_count / distinct_customers if distinct_customers > 0 else 0
-
-    payment_counts = {}
-    for doc in completed_orders_docs:
-        payment_type = doc.to_dict().get('paymentDetails', {}).get('type', 'Desconocido')
-        payment_counts[payment_type] = payment_counts.get(payment_type, 0) + 1
-    
-    services_ref = db.collection('services').order_by('stats.purchaseCount', direction=Query.DESCENDING).limit(5)
-    top_services = [{"name": doc.to_dict().get('name'), "purchases": doc.to_dict().get('stats', {}).get('purchaseCount', 0)} for doc in services_ref.stream()]
-
-    return {"aov_clp": aov_clp, "purchase_frequency": purchase_frequency, "payment_method_distribution": payment_counts, "abandonment_rate": abandonment_rate, "service_performance": top_services}
-
-def get_cart_abandonment_rate(start_date, end_date, return_conversion=False):
-    """Calcula la tasa de abandono o conversión de carritos."""
-    db = get_db_client()
+    # ... (la lógica de abandono de carrito no cambia)
     carts_ref = db.collection('carts').where(filter=FieldFilter('createdAt', '>=', start_date)).where(filter=FieldFilter('createdAt', '<=', end_date))
-    all_carts = list(carts_ref.stream())
+    all_carts = [doc.to_dict() for doc in carts_ref.stream()]
+    total_carts, converted_carts = len(all_carts), sum(1 for cart in all_carts if cart.get('status') == 'converted')
+    abandonment_rate = ((total_carts - converted_carts) / total_carts) * 100 if total_carts > 0 else 0
     
-    if not all_carts: return 0
-    total_carts = len(all_carts)
-    converted_carts = sum(1 for doc in all_carts if doc.to_dict().get('status') == 'converted')
+    if not completed_orders_docs:
+        return {"aov_clp": 0, "purchase_frequency": 0, "payment_method_distribution": {}, "abandonment_rate": round(abandonment_rate, 2), "top_categories": []}
+
+    df_orders = pd.DataFrame(completed_orders_docs)
     
-    if return_conversion:
-        return (converted_carts / total_carts) * 100 if total_carts > 0 else 0
-    else:
-        abandoned_carts = total_carts - converted_carts
-        return (abandoned_carts / total_carts) * 100 if total_carts > 0 else 0
+    # --- KPIs que no cambian ---
+    aov_clp = df_orders['total'].mean()
+    purchase_frequency = len(df_orders) / df_orders['customerId'].nunique() if df_orders['customerId'].nunique() > 0 else 0
+    df_orders['payment_type'] = df_orders['paymentDetails'].apply(lambda x: x.get('type', 'Desconocido') if isinstance(x, dict) else 'Desconocido')
+    payment_distribution = df_orders['payment_type'].value_counts().to_dict()
 
-# ===================================================================
-# ===       FUNCIONES PARA LA PÁGINA DE OPERACIONES Y CALIDAD   ===
-# ===================================================================
-
-def get_operations_kpis(start_date: datetime, end_date: datetime) -> Dict[str, Any]:
-    """Calcula todos los KPIs relacionados con las operaciones y la calidad del servicio."""
-    db = get_db_client()
-    orders_query = db.collection('orders').where(filter=FieldFilter('createdAt', '>=', start_date)).where(filter=FieldFilter('createdAt', '<=', end_date))
-    all_orders_docs = list(orders_query.stream())
-    
-    if not all_orders_docs:
-        return {"cancellation_rate": 0, "avg_cycle_time_days": 0, "avg_rating": 0, "orders_by_commune": {}, "orders_by_hour": {}}
-
-    total_orders = len(all_orders_docs)
-    cancelled_orders = sum(1 for doc in all_orders_docs if doc.to_dict().get('status') == 'cancelled')
-    cancellation_rate = (cancelled_orders / total_orders) * 100 if total_orders > 0 else 0
-
-    completed_orders_docs = [doc for doc in all_orders_docs if doc.to_dict().get('status') == 'completed']
-    
-    cycle_times_in_seconds = []
-    for doc in completed_orders_docs:
-        history = doc.to_dict().get('statusHistory', [])
-        timestamps = {item['status']: item['timestamp'] for item in history if 'status' in item and 'timestamp' in item}
-        if 'paid' in timestamps and 'completed' in timestamps:
-            cycle_times_in_seconds.append((timestamps['completed'] - timestamps['paid']).total_seconds())
-    
-    avg_cycle_time_days = (sum(cycle_times_in_seconds) / len(cycle_times_in_seconds)) / (24 * 3600) if cycle_times_in_seconds else 0
-    ratings = [doc.to_dict().get('rating', {}).get('stars', 0) for doc in completed_orders_docs if doc.to_dict().get('rating')]
-    avg_rating = sum(ratings) / len(ratings) if ratings else 0
-
-    commune_counts = {}
-    for doc in completed_orders_docs:
-        commune = doc.to_dict().get('serviceAddress', {}).get('commune', 'Desconocida')
-        commune_counts[commune] = commune_counts.get(commune, 0) + 1
-
-    orders_by_hour = [0] * 24
-    for doc in all_orders_docs:
-        if created_at := doc.to_dict().get('createdAt'): orders_by_hour[created_at.hour] += 1
+    # --- NUEVA LÓGICA: Top 5 Categorías por Monto Vendido ---
+    top_categories = []
+    if 'items' in df_orders.columns:
+        # 1. Obtenemos una lista de todos los serviceId únicos vendidos en el período
+        all_items = df_orders.explode('items').dropna(subset=['items'])
+        all_items['serviceId'] = all_items['items'].apply(lambda x: x.get('serviceId') if isinstance(x, dict) else None)
+        unique_service_ids = all_items['serviceId'].dropna().unique().tolist()
+        
+        if unique_service_ids:
+            # 2. Hacemos una única consulta para obtener los detalles de esos servicios
+            services_docs = {doc.id: doc.to_dict() for doc in db.collection('services').where(filter=FieldFilter('id', 'in', unique_service_ids)).stream()}
             
+            # 3. Mapeamos cada serviceId a su nombre de categoría
+            all_items['category_info'] = all_items['serviceId'].map(lambda sid: services_docs.get(sid, {}).get('category'))
+            all_items['category_name'] = all_items['category_info'].apply(lambda c: c.get('name') if isinstance(c, dict) else 'Sin Categoría')
+            all_items['item_price'] = all_items['items'].apply(lambda i: i.get('price', 0) if isinstance(i, dict) else 0)
+            
+            # 4. Agrupamos por nombre de categoría y sumamos el total vendido
+            category_sales = all_items.groupby('category_name')['item_price'].sum().nlargest(5)
+            top_categories = [{"name": index, "sales": value} for index, value in category_sales.items()]
+
     return {
-        "cancellation_rate": cancellation_rate, "avg_cycle_time_days": avg_cycle_time_days,
-        "avg_rating": avg_rating, "orders_by_commune": commune_counts, "orders_by_hour": orders_by_hour
+        "aov_clp": round(aov_clp, 2),
+        "purchase_frequency": round(purchase_frequency, 2),
+        "payment_method_distribution": payment_distribution,
+        "abandonment_rate": round(abandonment_rate, 2),
+        "top_categories": top_categories # <-- Devolvemos las categorías en lugar de los servicios
     }
 
-# ===================================================================
-# ===       FUNCIONES PARA LA PÁGINA DE RETENCIÓN Y LEALTAD       ===
-# ===================================================================
-
-def get_retention_kpis(period_end_date: datetime) -> Dict[str, Any]:
-    """Calcula KPIs clave de retención y lealtad."""
+def get_operations_kpis(start_date: datetime, end_date: datetime) -> Dict[str, Any]:
+    """
+    Calcula KPIs de operaciones y calidad de forma robusta.
+    """
     db = get_db_client()
-    all_users_docs = list(db.collection('users').where(filter=FieldFilter('createdAt', '<=', period_end_date)).stream())
-    all_orders_docs = list(db.collection('orders').where(filter=FieldFilter('status', '==', 'completed')).where(filter=FieldFilter('createdAt', '<=', period_end_date)).stream())
+    orders_query = db.collection('orders').where(filter=FieldFilter('createdAt', '>=', start_date)).where(filter=FieldFilter('createdAt', '<=', end_date))
+    all_orders = [doc.to_dict() for doc in orders_query.stream()]
+    
+    if not all_orders:
+        return {"cancellation_rate": 0, "avg_rating": 0, "orders_by_commune": {}, "orders_by_hour": {}}
 
-    if not all_users_docs:
-        return {"mau": 0, "ltv_clp": 0, "repurchase_rate": 0, "cohort_data": None}
+    df_all_orders = pd.DataFrame(all_orders)
 
-    thirty_days_ago = period_end_date - timedelta(days=30)
-    mau_query = db.collection('users').where(filter=FieldFilter('lastLoginAt', '>=', thirty_days_ago)).where(filter=FieldFilter('lastLoginAt', '<=', period_end_date))
-    mau_count = len(list(mau_query.stream()))
+    # --- Cálculo Robusto de Tasa de Cancelación ---
+    if 'status' in df_all_orders.columns:
+        total_orders = len(df_all_orders)
+        cancellation_rate = (df_all_orders['status'] == 'cancelled').sum() / total_orders * 100 if total_orders > 0 else 0
+    else:
+        cancellation_rate = 0
 
-    ltv_clp, repurchase_rate, cohort_data_for_frontend = 0, 0, None
-    if all_orders_docs:
-        orders_df = pd.DataFrame([doc.to_dict() for doc in all_orders_docs])
-        total_revenue, distinct_customers = orders_df['total'].sum(), orders_df['customerId'].nunique()
-        ltv_clp = total_revenue / distinct_customers if distinct_customers > 0 else 0
-        customer_order_counts = orders_df.groupby('customerId').size()
-        repeat_customers, total_customers_with_orders = (customer_order_counts > 1).sum(), len(customer_order_counts)
-        repurchase_rate = (repeat_customers / total_customers_with_orders) * 100 if total_customers_with_orders > 0 else 0
-        
-        users_df = pd.DataFrame([{'userId': doc.id, 'signup_month': pd.to_datetime(doc.to_dict()['createdAt']).to_period('M')} for doc in all_users_docs])
-        orders_df['order_month'] = pd.to_datetime(orders_df['createdAt']).to_period('M')
-        df_merged = pd.merge(orders_df, users_df, left_on='customerId', right_on='userId', how='left').dropna(subset=['signup_month'])
-        
-        get_month_diff = lambda start, end: (end.year - start.year) * 12 + (end.month - start.month)
-        df_merged['cohort_index'] = df_merged.apply(lambda row: get_month_diff(row['signup_month'], row['order_month']), axis=1)
-        
-        cohort_data = df_merged.groupby(['signup_month', 'cohort_index'])['customerId'].nunique().reset_index()
-        cohort_counts = cohort_data.pivot_table(index='signup_month', columns='cohort_index', values='customerId')
-        retention_matrix = cohort_counts.divide(cohort_counts.iloc[:, 0], axis=0) * 100
-        retention_matrix.index = retention_matrix.index.strftime('%Y-%m')
-        cohort_data_for_frontend = retention_matrix.round(2).fillna(0).to_dict('split')
+    df_completed = df_all_orders[df_all_orders['status'] == 'completed'].copy() if 'status' in df_all_orders.columns else pd.DataFrame()
+    
+    # --- Cálculo Robusto de Calificación Promedio ---
+    if not df_completed.empty and 'rating' in df_completed.columns:
+        # Usamos .dropna() para ignorar órdenes sin calificación
+        ratings = df_completed['rating'].dropna().apply(lambda r: r.get('stars') if isinstance(r, dict) else None)
+        avg_rating = ratings.mean()
+    else:
+        avg_rating = 0
 
-    return {"mau": mau_count, "ltv_clp": ltv_clp, "repurchase_rate": repurchase_rate, "cohort_data": cohort_data_for_frontend}
+    # --- Cálculo Robusto de Órdenes por Comuna ---
+    if not df_completed.empty and 'serviceAddress' in df_completed.columns:
+        orders_by_commune = df_completed['serviceAddress'].apply(lambda sa: sa.get('commune', 'Desconocida') if isinstance(sa, dict) else 'Desconocida').value_counts().to_dict()
+    else:
+        orders_by_commune = {}
+    
+    # --- Cálculo Robusto de Órdenes por Hora ---
+    if 'createdAt' in df_all_orders.columns:
+        # Usamos errors='coerce' para manejar fechas malformadas
+        df_all_orders['hour'] = pd.to_datetime(df_all_orders['createdAt'], errors='coerce', utc=True).dt.hour
+        # Usamos .dropna() para ignorar filas donde la fecha no se pudo convertir
+        orders_by_hour = df_all_orders.dropna(subset=['hour'])['hour'].astype(int).value_counts().sort_index().reindex(range(24), fill_value=0).tolist()
+    else:
+        orders_by_hour = [0] * 24
+    
+    # Nota: El cálculo de avg_cycle_time_days se omite por ahora hasta que se valide la existencia y formato de 'statusHistory'.
+    
+    return {
+        "cancellation_rate": round(cancellation_rate, 2),
+        "avg_rating": round(avg_rating, 2) if pd.notna(avg_rating) else 0,
+        "orders_by_commune": orders_by_commune,
+        "orders_by_hour": orders_by_hour
+    }
 
-# ===================================================================
-# ===       FUNCIONES PARA LA PÁGINA DE SEGMENTACIÓN              ===
-# ===================================================================
+def get_retention_kpis(start_date: datetime, end_date: datetime) -> Dict[str, Any]:
+    """Calcula KPIs de retención."""
+    all_orders_docs = _get_completed_orders_in_range(start_date, end_date)
+    if not all_orders_docs: return {"ltv_clp": 0, "repurchase_rate": 0}
+    
+    df_orders = pd.DataFrame(all_orders_docs)
+    total_revenue = df_orders['total'].sum()
+    distinct_customers_who_purchased = df_orders['customerId'].nunique()
+    ltv_clp = total_revenue / distinct_customers_who_purchased if distinct_customers_who_purchased > 0 else 0
+    
+    customer_order_counts = df_orders.groupby('customerId').size()
+    repeat_customers = (customer_order_counts > 1).sum()
+    repurchase_rate = (repeat_customers / distinct_customers_who_purchased) * 100 if distinct_customers_who_purchased > 0 else 0
 
-def get_rfm_segmentation(period_end_date: datetime) -> Dict[str, Any]:
-    """Realiza un análisis RFM completo para segmentar a los clientes."""
-    db = get_db_client()
-    orders_query = db.collection('orders').where(filter=FieldFilter('status', '==', 'completed')).where(filter=FieldFilter('createdAt', '<=', period_end_date))
-    all_orders_docs = list(orders_query.stream())
+    return {"ltv_clp": round(ltv_clp, 2), "repurchase_rate": round(repurchase_rate, 2)}
+
+
+def get_rfm_segmentation(start_date: datetime, end_date: datetime) -> Dict[str, Any]:
+    """Realiza un análisis RFM para segmentar a los clientes en un período de tiempo."""
+    all_orders_docs = _get_completed_orders_in_range(start_date, end_date)
 
     if not all_orders_docs:
         return {"segment_distribution": {}, "sample_customers": {}}
 
-    orders_df = pd.DataFrame([{**doc.to_dict(), 'id': doc.id} for doc in all_orders_docs])
-    orders_df['createdAt'] = pd.to_datetime(orders_df['createdAt'])
-    snapshot_date = period_end_date + timedelta(days=1)
+    orders_df = pd.DataFrame(all_orders_docs)
+    orders_df['createdAt'] = pd.to_datetime(orders_df['createdAt'], utc=True)
+    snapshot_date = end_date # Usamos el fin del rango como fecha de referencia
     
-    rfm_df = orders_df.groupby('customerId').agg(recency=('createdAt', lambda date: (snapshot_date - date.max()).days), frequency=('id', 'count'), monetary=('total', 'sum'))
-    rfm_df['R_score'] = pd.qcut(rfm_df['recency'], 4, labels=[4, 3, 2, 1], duplicates='drop')
-    rfm_df['F_score'] = pd.qcut(rfm_df['frequency'].rank(method='first'), 4, labels=[1, 2, 3, 4], duplicates='drop')
-    rfm_df['M_score'] = pd.qcut(rfm_df['monetary'].rank(method='first'), 4, labels=[1, 2, 3, 4], duplicates='drop')
+    rfm_df = orders_df.groupby('customerId').agg(
+        recency=('createdAt', lambda date: (snapshot_date - date.max()).days),
+        frequency=('id', 'count'),
+        monetary=('total', 'sum')
+    ).reset_index() # reset_index para tener customerId como columna
+    
+    # Manejo de qcut con posibles valores duplicados y pocos datos
+    try:
+        rfm_df['R_score'] = pd.qcut(rfm_df['recency'], 4, labels=[4, 3, 2, 1], duplicates='drop')
+        rfm_df['F_score'] = pd.qcut(rfm_df['frequency'].rank(method='first'), 4, labels=[1, 2, 3, 4], duplicates='drop')
+        rfm_df['M_score'] = pd.qcut(rfm_df['monetary'].rank(method='first'), 4, labels=[1, 2, 3, 4], duplicates='drop')
+    except ValueError:
+        rfm_df['R_score'] = 1; rfm_df['F_score'] = 1; rfm_df['M_score'] = 1
+
+    # Asegurarnos de que las columnas de score existan antes de convertirlas a string
+    for score in ['R_score', 'F_score', 'M_score']:
+        if score not in rfm_df.columns: rfm_df[score] = 1
+            
     rfm_df['RFM_score'] = rfm_df['R_score'].astype(str) + rfm_df['F_score'].astype(str) + rfm_df['M_score'].astype(str)
     
-    segment_map = {r'[3-4][3-4][3-4]': '🏆 Campeones', r'[3-4][1-2][1-4]': '💖 Clientes Leales', r'[1-2][3-4][3-4]': '😮 En Riesgo', r'[1-2][1-2][1-2]': '❄️ Hibernando'}
+    segment_map = {
+        r'[3-4][3-4][3-4]': '🏆 Campeones',
+        r'[3-4][1-2][1-4]': '💖 Leales',
+        r'[1-2][3-4][3-4]': '😮 En Riesgo',
+        r'[1-2][1-2][1-2]': '❄️ Hibernando'
+    }
     rfm_df['segment'] = rfm_df['RFM_score'].replace(segment_map, regex=True)
-    rfm_df['segment'] = rfm_df.apply(lambda row: 'Otros' if row['segment'].startswith(('1','2','3','4')) else row['segment'], axis=1)
+    # Si un score no coincide con los patrones, se clasifica como 'Otros'
+    rfm_df.loc[~rfm_df['segment'].isin(segment_map.values()), 'segment'] = 'Otros'
     
     segment_distribution = rfm_df['segment'].value_counts().to_dict()
-    sample_customers = {segment: rfm_df[rfm_df['segment'] == segment].head(5).reset_index().to_dict('records') for segment in rfm_df['segment'].unique()}
+    
+    # Para la muestra, enriquecemos con el email desde la colección 'customers'
+    db = get_db_client()
+    customers_docs = {doc.id: doc.to_dict() for doc in db.collection('customers').stream()}
+    rfm_df['email'] = rfm_df['customerId'].map(lambda cid: customers_docs.get(cid, {}).get('email', 'N/A'))
+
+    sample_customers = {
+        segment: rfm_df[rfm_df['segment'] == segment].head(5)[['customerId', 'email', 'recency', 'frequency', 'monetary']].to_dict('records') 
+        for segment in rfm_df['segment'].unique()
+    }
     
     return {"segment_distribution": segment_distribution, "sample_customers": sample_customers}
 
@@ -332,310 +301,125 @@ def get_rfm_segmentation(period_end_date: datetime) -> Dict[str, Any]:
 # ===================================================================
 
 def get_all_documents(collection_name: str) -> List[Dict[str, Any]]:
-    """Obtiene todos los documentos de una colección de nivel superior."""
     db = get_db_client()
     docs = db.collection(collection_name).stream()
     return [{**doc.to_dict(), "id": doc.id} for doc in docs]
 
 def update_document(collection_name: str, doc_id: str, data: Dict[str, Any]):
-    """Actualiza un documento en una colección de nivel superior."""
-    db = get_db_client()
-    db.collection(collection_name).document(doc_id).update(data)
+    get_db_client().collection(collection_name).document(doc_id).update(data)
 
-def create_document(collection_name: str, data: Dict[str, Any]) -> str:
-    """Crea un documento en una colección de nivel superior y devuelve su ID."""
+def create_document(collection_name: str, data: Dict[str, Any], doc_id: str = None) -> str:
     db = get_db_client()
-    doc_ref = db.collection(collection_name).document()
+    doc_ref = db.collection(collection_name).document(doc_id) if doc_id else db.collection(collection_name).document()
     doc_ref.set(data)
     return doc_ref.id
 
-def get_subcollection_document(parent_collection: str, parent_doc_id: str, subcollection_name: str, sub_doc_id: str) -> Dict[str, Any]:
-    """Obtiene un único documento de una subcolección."""
-    db = get_db_client()
-    doc_ref = db.collection(parent_collection).document(parent_doc_id).collection(subcollection_name).document(sub_doc_id)
-    doc = doc_ref.get()
-    if doc.exists:
-        return {**doc.to_dict(), "id": doc.id}
-    return None
-
-def list_subcollection_documents(parent_collection: str, parent_doc_id: str, subcollection_name: str) -> List[Dict[str, Any]]:
-    """Obtiene todos los documentos de una subcolección."""
-    db = get_db_client()
-    docs = db.collection(parent_collection).document(parent_doc_id).collection(subcollection_name).stream()
-    return [{**doc.to_dict(), "id": doc.id} for doc in docs]
-
-def update_document_in_subcollection(parent_collection: str, parent_doc_id: str, subcollection_name: str, doc_id: str, data: Dict[str, Any]):
-    """Actualiza un documento en una subcolección."""
-    db = get_db_client()
-    db.collection(parent_collection).document(parent_doc_id).collection(subcollection_name).document(doc_id).update(data)
-
-def create_subcollection_document(parent_collection: str, parent_doc_id: str, subcollection_name: str, data: Dict[str, Any]) -> str:
-    """Crea un documento en una subcolección y devuelve su ID."""
-    db = get_db_client()
-    doc_ref = db.collection(parent_collection).document(parent_doc_id).collection(subcollection_name).document()
-    doc_ref.set(data)
-    return doc_ref.id
-    
-def delete_document_in_subcollection(parent_collection: str, parent_doc_id: str, subcollection_name: str, doc_id: str):
-    """Elimina un documento de una subcolección."""
-    db = get_db_client()
-    db.collection(parent_collection).document(parent_doc_id).collection(subcollection_name).document(doc_id).delete()
-
-def list_nested_subcollection_documents(p_coll: str, p_doc: str, sub_coll1: str, sub_doc1: str, sub_coll2: str) -> List[Dict[str, Any]]:
-    """Obtiene todos los documentos de una subcolección anidada (ej: addresses)."""
-    db = get_db_client()
-    docs = db.collection(p_coll).document(p_doc).collection(sub_coll1).document(sub_doc1).collection(sub_coll2).stream()
-    return [{**doc.to_dict(), "id": doc.id} for doc in docs]
-
-def update_document_in_nested_subcollection(p_coll: str, p_doc: str, sub_coll1: str, sub_doc1: str, sub_coll2: str, doc_id: str, data: Dict[str, Any]):
-    """Actualiza un documento en una subcolección anidada."""
-    db = get_db_client()
-    doc_ref = db.collection(p_coll).document(p_doc).collection(sub_coll1).document(sub_doc1).collection(sub_coll2).document(doc_id)
-    doc_ref.update(data)
-
-
-def get_firestore_data_for_audit(order_id: str) -> dict:
-    """
-    Recopila todos los documentos de Firestore relacionados con un ID de orden.
-    """
-    db = get_db_client()
-    audit_data = {
-        "order": None,
-        "user": None,
-        "profile": None,
-        "address": None
-    }
-
-    # 1. Obtener la orden
-    order_ref = db.collection("orders").document(order_id)
-    order_doc = order_ref.get()
-    if not order_doc.exists:
-        return {"error": f"Orden con ID {order_id} no encontrada en Firestore."}
-    
-    order_data = order_doc.to_dict()
-    audit_data["order"] = order_data
-
-    # 2. Obtener el usuario
-    user_id = order_data.get("userId")
-    if user_id:
-        user_ref = db.collection("users").document(user_id)
-        user_doc = user_ref.get()
-        if user_doc.exists:
-            audit_data["user"] = user_doc.to_dict()
-
-    # 3. Obtener el perfil
-    if user_id:
-        # Asumiendo que el profileId es el mismo que el userId
-        profile_ref = db.collection("users").document(user_id).collection("customer_profiles").document(user_id)
-        profile_doc = profile_ref.get()
-        if profile_doc.exists:
-            audit_data["profile"] = profile_doc.to_dict()
-
-    # 4. Obtener la dirección
-    address_id = order_data.get("addressId")
-    if user_id and address_id:
-        # Asumiendo la estructura de subcolección anidada
-        address_ref = db.collection("users").document(user_id).collection("customer_profiles").document(user_id).collection("addresses").document(address_id)
-        address_doc = address_ref.get()
-        if address_doc.exists:
-            audit_data["address"] = address_doc.to_dict()
-
-    return audit_data
-
-def get_firestore_service_data_for_audit(service_id: str) -> dict:
-    """
-    Recopila todos los documentos de Firestore relacionados con un ID de servicio.
-    """
-    db = get_db_client()
-    audit_data = {
-        "service": None,
-        "category": None,
-        "variants": [],
-        "subcategories": []
-    }
-
-    # 1. Obtener el servicio
-    service_ref = db.collection("services").document(service_id)
-    service_doc = service_ref.get()
-    if not service_doc.exists:
-        return {"error": f"Servicio con ID {service_id} no encontrado en Firestore."}
-    
-    service_data = service_doc.to_dict()
-    audit_data["service"] = service_data
-
-    # 2. Obtener la categoría
-    category_id = service_data.get("categoryId")
-    if category_id:
-        category_ref = db.collection("categories").document(str(category_id))
-        category_doc = category_ref.get()
-        if category_doc.exists:
-            audit_data["category"] = category_doc.to_dict()
-
-    # 3. Obtener las variantes
-    variants_ref = service_ref.collection("variants").stream()
-    audit_data["variants"] = [doc.to_dict() for doc in variants_ref]
-
-    # 4. Obtener las subcategorías
-    subcategories_ref = service_ref.collection("subcategories").stream()
-    audit_data["subcategories"] = [doc.to_dict() for doc in subcategories_ref]
-
-    return audit_data
-
-# ... (al final del archivo, en una nueva sección)
-
-def get_firestore_data_health_summary() -> dict:
-    """
-    Realiza un análisis completo de la salud y completitud de los datos en Firestore.
-    """
-    db = get_db_client()
-    summary = {
-        "collection_counts": {},
-        "user_health": {},
-        "service_health": {}
-    }
-
-    # 1. Conteos de Colecciones Principales
-    main_collections = ["users", "orders", "services", "categories"]
-    for col in main_collections:
-        # stream() es costoso para solo contar, pero es la forma más directa sin índices de conteo
-        docs = db.collection(col).stream()
-        summary["collection_counts"][col] = sum(1 for _ in docs)
-
-    # 2. Análisis de Salud de la Colección 'users'
-    users_ref = db.collection("users").stream()
-    all_users = list(users_ref)
-    total_users = len(all_users)
-    
-    if total_users > 0:
-        profiles_count = 0
-        profiles_with_rut = 0
-        addresses_subcollection_count = 0
-        total_addresses = 0
-        addresses_per_user = []
-
-        for user_doc in all_users:
-            profile_ref = user_doc.reference.collection("customer_profiles").limit(1).get()
-            if profile_ref:
-                profiles_count += 1
-                # Suponiendo que el profileId es el mismo que el userId
-                profile_data = user_doc.reference.collection("customer_profiles").document(user_doc.id).get()
-                if profile_data.exists and profile_data.to_dict().get("rut"):
-                    profiles_with_rut += 1
-
-                addresses_ref = user_doc.reference.collection("customer_profiles").document(user_doc.id).collection("addresses").stream()
-                user_addresses = list(addresses_ref)
-                if user_addresses:
-                    addresses_subcollection_count += 1
-                    num_addresses = len(user_addresses)
-                    total_addresses += num_addresses
-                    addresses_per_user.append(num_addresses)
-
-        summary["user_health"] = {
-            "total_users": total_users,
-            "with_customer_profile_percent": (profiles_count / total_users) * 100 if total_users > 0 else 0,
-            "profiles_with_rut_percent": (profiles_with_rut / profiles_count) * 100 if profiles_count > 0 else 0,
-            "with_addresses_subcollection_percent": (addresses_subcollection_count / profiles_count) * 100 if profiles_count > 0 else 0,
-            "avg_addresses_per_user": sum(addresses_per_user) / len(addresses_per_user) if addresses_per_user else 0,
-            "max_addresses_in_one_user": max(addresses_per_user) if addresses_per_user else 0
-        }
-
-    # 3. Análisis de Salud de la Colección 'services'
-    # (Se puede añadir una lógica similar para servicios, variantes, etc. si es necesario)
-    
-    return summary
-
-def add_item_to_service_array(service_id: str, array_name: str, item_data: dict):
-    """
-    Añade un nuevo item (variante o subcategoría) a un arreglo dentro de un documento de servicio.
-    Utiliza una operación atómica ArrayUnion.
-    """
-    db = get_db_client()
-    service_ref = db.collection('services').document(service_id)
-    
-    # Usamos ArrayUnion para añadir el item al arreglo de forma segura
-    service_ref.update({
-        array_name: firestore.ArrayUnion([item_data])
-    })
-    
-    # También actualizamos el flag booleano correspondiente
-    if array_name == "variants":
-        service_ref.update({"hasVariants": True})
-    elif array_name == "subcategories":
-        service_ref.update({"hasSubcategories": True})
-
-
-# ===================================================================
-# ===             FUNCIONES CRUD PARA COLECCIÓN 'customers'       ===
-# ===================================================================
-
+# --- CRUD para Colección 'customers' (Modelo Nuevo) ---
 def get_all_customers() -> List[Dict[str, Any]]:
-    """Obtiene todos los documentos de la colección 'customers'."""
-    return get_all_documents("customers") # Reutilizamos la función genérica
+    return get_all_documents("customers")
 
 def get_customer(customer_id: str) -> Dict[str, Any]:
-    """Obtiene un único documento de la colección 'customers'."""
     db = get_db_client()
     doc = db.collection("customers").document(customer_id).get()
-    if doc.exists:
-        return {**doc.to_dict(), "id": doc.id}
-    return None
+    return {**doc.to_dict(), "id": doc.id} if doc.exists else None
 
 def update_customer_main_fields(customer_id: str, data: Dict[str, Any]):
-    """Actualiza los campos de nivel superior de un documento de cliente."""
-    update_document("customers", customer_id, data) # Reutilizamos
+    update_document("customers", customer_id, data)
 
 def add_address_to_customer(customer_id: str, address_data: Dict[str, Any]):
-    """Añade una nueva dirección al arreglo 'addresses' de un cliente."""
-    db = get_db_client()
-    customer_ref = db.collection('customers').document(customer_id)
-    customer_ref.update({
-        "addresses": firestore.ArrayUnion([address_data])
-    })
-
-def remove_address_from_customer(customer_id: str, address_data: Dict[str, Any]):
-    """Elimina una dirección del arreglo 'addresses' de un cliente."""
-    db = get_db_client()
-    customer_ref = db.collection('customers').document(customer_id)
-    customer_ref.update({
-        "addresses": firestore.ArrayRemove([address_data])
-    })
-
+    customer_ref = get_db_client().collection('customers').document(customer_id)
+    customer_ref.update({"addresses": firestore.ArrayUnion([address_data])})
 
 def update_address_in_customer_array(customer_id: str, address_data: Dict[str, Any]):
-    """
-    Actualiza un objeto de dirección específico dentro del arreglo 'addresses' de un cliente.
-    """
     db = get_db_client()
     customer_ref = db.collection('customers').document(customer_id)
-    
-    # Obtenemos el documento actual del cliente
     customer_doc = customer_ref.get()
-    if not customer_doc.exists:
-        raise ValueError(f"Cliente con ID {customer_id} no encontrado.")
-
+    if not customer_doc.exists: raise ValueError(f"Cliente {customer_id} no encontrado.")
     customer_data = customer_doc.to_dict()
     addresses = customer_data.get('addresses', [])
-    
-    # Buscamos la dirección por su ID y la actualizamos
     address_id_to_update = address_data.get("id")
     address_found = False
     for i, addr in enumerate(addresses):
         if addr.get("id") == address_id_to_update:
-            addresses[i] = address_data # Reemplazamos el objeto completo
-            address_found = True
-            break
-            
-    if not address_found:
-        raise ValueError(f"Dirección con ID {address_id_to_update} no encontrada para el cliente.")
-
-    # Reescribimos el arreglo completo de direcciones en el documento
+            addresses[i] = address_data; address_found = True; break
+    if not address_found: raise ValueError(f"Dirección {address_id_to_update} no encontrada.")
     customer_ref.update({"addresses": addresses})
 
-# También es buena idea tener una función para eliminar
-def delete_address_from_customer_array(customer_id: str, address_id: str):
-    """
-    Elimina un objeto de dirección del arreglo 'addresses' basado en su ID.
-    """
-    # Esta lógica es similar: leer, filtrar y reescribir.
-    # Por ahora, nos centraremos en la actualización.
-    pass
+# --- CRUD para Colección 'services' (Modelo Híbrido Nuevo) ---
+def add_item_to_service_array(service_id: str, array_name: str, item_data: dict):
+    db = get_db_client()
+    service_ref = db.collection('services').document(service_id)
+    service_ref.update({array_name: firestore.ArrayUnion([item_data])})
+    
+# ===================================================================
+# ===        FUNCIONES DE SOPORTE (AUDITORÍA, SALUD, ETC.)        ===
+# ===================================================================
+
+def get_firestore_data_health_summary() -> dict:
+    db = get_db_client()
+    summary = {"collection_counts": {}, "user_health": {}}
+    main_collections = ["users", "orders", "services", "categories", "customers"]
+    for col in main_collections:
+        docs = db.collection(col).stream()
+        summary["collection_counts"][col] = sum(1 for _ in docs)
+    
+    customers_ref = db.collection("customers").stream()
+    all_customers = list(customers_ref)
+    total_customers = len(all_customers)
+    
+    if total_customers > 0:
+        customers_dicts = [doc.to_dict() for doc in all_customers]
+        with_rut = sum(1 for c in customers_dicts if c.get("rut"))
+        with_addresses = sum(1 for c in customers_dicts if c.get("addresses"))
+        addresses_counts = [len(c.get("addresses", [])) for c in customers_dicts]
+        
+        summary["user_health"] = {
+            "total_customers": total_customers,
+            "with_rut_percent": (with_rut / total_customers) * 100,
+            "with_addresses_percent": (with_addresses / total_customers) * 100,
+            "avg_addresses_per_customer": sum(addresses_counts) / len(addresses_counts) if addresses_counts else 0,
+            "max_addresses_in_one_customer": max(addresses_counts) if addresses_counts else 0
+        }
+    return summary
+
+def get_all_documents_from_subcollection(main_collection_name: str, subcollection_name: str) -> list:
+    db = get_db_client()
+    all_docs = []
+    for doc in db.collection(main_collection_name).stream():
+        parent_id = doc.id
+        for sub_doc in doc.reference.collection(subcollection_name).stream():
+            sub_doc_data = sub_doc.to_dict(); sub_doc_data['userId'] = parent_id; all_docs.append(sub_doc_data)
+    return all_docs
+
+def get_firestore_data_for_audit(order_id: str) -> dict:
+    db = get_db_client()
+    audit_data = {"order": None, "user": None, "profile": None, "address": None}
+    order_doc = db.collection("orders").document(order_id).get()
+    if not order_doc.exists: return {"error": f"Orden {order_id} no encontrada."}
+    order_data = order_doc.to_dict(); audit_data["order"] = order_data
+    user_id = order_data.get("userId")
+    if user_id:
+        user_doc = db.collection("users").document(user_id).get()
+        if user_doc.exists: audit_data["user"] = user_doc.to_dict()
+        profile_doc = db.collection("users").document(user_id).collection("customer_profiles").document(user_id).get()
+        if profile_doc.exists: audit_data["profile"] = profile_doc.to_dict()
+    address_id = order_data.get("addressId")
+    if user_id and address_id:
+        address_doc = db.collection("users").document(user_id).collection("customer_profiles").document(user_id).collection("addresses").document(address_id).get()
+        if address_doc.exists: audit_data["address"] = address_doc.to_dict()
+    return audit_data
+
+def get_firestore_service_data_for_audit(service_id: str) -> dict:
+    db = get_db_client()
+    audit_data = {"service": None, "category": None, "variants": [], "subcategories": []}
+    service_ref = db.collection("services").document(service_id)
+    service_doc = service_ref.get()
+    if not service_doc.exists: return {"error": f"Servicio {service_id} no encontrado."}
+    service_data = service_doc.to_dict(); audit_data["service"] = service_data
+    category_id = service_data.get("categoryId")
+    if category_id:
+        category_doc = db.collection("categories").document(str(category_id)).get()
+        if category_doc.exists: audit_data["category"] = category_doc.to_dict()
+    audit_data["variants"] = [doc.to_dict() for doc in service_ref.collection("variants").stream()]
+    audit_data["subcategories"] = [doc.to_dict() for doc in service_ref.collection("subcategories").stream()]
+    return audit_data
