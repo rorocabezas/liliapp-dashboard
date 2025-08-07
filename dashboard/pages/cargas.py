@@ -6,6 +6,7 @@ import datetime
 # --- Importaciones ---
 from dashboard.auth import check_login
 from dashboard.menu import render_menu
+from dashboard.api_client import clean_services_subcollections_api
 
 from dashboard.api_client import (
     get_all_jumpseller_orders, 
@@ -197,3 +198,25 @@ with st.form("etl_runner_form"):
             run_products_etl_normalized(is_test_run, log_container)
         elif etl_process == "Servicios (Modelo Híbrido: arreglos de refs)":
             run_products_etl_hybrid(is_test_run, log_container)
+
+
+# ==========================================================
+# ===                 HERRAMIENTAS DE MANTENIMIENTO        ===
+# ==========================================================
+st.markdown("---")
+st.subheader("🛠️ Herramientas de Mantenimiento de Datos")
+st.warning("PRECAUCIÓN: Las siguientes operaciones modifican o eliminan datos de forma masiva.", icon="⚠️")
+
+if st.button("🧹 Iniciar Limpieza de Subcolecciones de Servicios", 
+             help="Elimina las subcolecciones 'variants' y 'subcategories' de TODOS los servicios. Este proceso se ejecuta en segundo plano y puede tardar varios minutos.",
+             type="secondary"):
+    
+    # La interacción con el usuario ahora es instantánea
+    st.info("Enviando solicitud para iniciar el proceso de limpieza...")
+    result = clean_services_subcollections_api()
+    
+    if result and result.get("status") == "accepted":
+        st.success("✅ ¡Solicitud aceptada! El proceso de limpieza ha comenzado en el servidor.")
+        st.caption("Puedes monitorear el progreso en la consola del backend. La limpieza puede tardar varios minutos en completarse.")
+    else:
+        st.error("Ocurrió un error al intentar iniciar el proceso. Revisa los logs del backend.")

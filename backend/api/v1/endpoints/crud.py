@@ -1,6 +1,6 @@
 # backend/api/v1/endpoints/crud.py
 
-from fastapi import APIRouter, HTTPException, Body
+from fastapi import APIRouter, HTTPException, Body, Depends, BackgroundTasks
 from typing import List, Dict, Any
 from backend.services import firestore_service
 from pydantic import BaseModel, EmailStr
@@ -306,3 +306,25 @@ def update_address_endpoint(customer_id: str, address_id: str, address_data: Dic
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+
+
+@router.post("/services/clean-subcollections", 
+             summary="[PELIGRO] Inicia la limpieza de subcolecciones en segundo plano",
+             status_code=202) # Usamos 202 Accepted para tareas en segundo plano
+def clean_services_subcollections_endpoint(background_tasks: BackgroundTasks):
+    """
+    Inicia una tarea en segundo plano para eliminar las subcolecciones 'variants' y
+    'subcategories' de todos los servicios. Responde inmediatamente.
+    """
+    try:
+        # Añadimos la función de larga duración a la cola de tareas en segundo plano
+        background_tasks.add_task(firestore_service.clean_services_subcollections)
+        
+        # Devolvemos una respuesta inmediata al cliente
+        return {
+            "status": "accepted",
+            "message": "El proceso de limpieza de subcolecciones se ha iniciado en segundo plano. Revisa los logs del servidor para ver el progreso."
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"No se pudo iniciar la tarea de limpieza: {str(e)}")

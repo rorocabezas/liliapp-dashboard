@@ -3,7 +3,7 @@ import streamlit as st
 import requests
 from pathlib import Path
 
-API_URL = "http://1227.0.0.1:8000"
+API_URL = "http://127.0.0.1:8000"
 
 def handle_login(email, password):
     """

@@ -3,6 +3,7 @@ import pandas as pd
 import traceback
 from firebase_admin import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any
 
@@ -423,3 +424,71 @@ def get_firestore_service_data_for_audit(service_id: str) -> dict:
     audit_data["variants"] = [doc.to_dict() for doc in service_ref.collection("variants").stream()]
     audit_data["subcategories"] = [doc.to_dict() for doc in service_ref.collection("subcategories").stream()]
     return audit_data
+
+
+# --- Limpieza Quirúrgica ---
+
+def _delete_collection_in_batches(coll_ref, batch_size, executor):
+    """Función de ayuda para borrar una colección por lotes."""
+    docs = coll_ref.limit(batch_size).stream()
+    deleted = 0
+    
+    futures = []
+    for doc in docs:
+        future = executor.submit(doc.reference.delete)
+        futures.append(future)
+        deleted += 1
+
+    # Esperar a que todos los borrados del lote terminen
+    for future in futures:
+        future.result()
+
+    if deleted >= batch_size:
+        return _delete_collection_in_batches(coll_ref, batch_size, executor)
+    return deleted
+
+def clean_services_subcollections() -> dict:
+    """
+    Itera sobre todos los documentos en la colección 'services' y elimina
+    recursivamente sus subcolecciones 'variants' y 'subcategories'.
+    Esta es una operación intensiva y debe usarse con cuidado.
+    """
+    db = get_db_client()
+    services_ref = db.collection('services')
+    all_services = list(services_ref.stream())
+    
+    total_services_scanned = len(all_services)
+    services_cleaned = 0
+    total_subdocs_deleted = 0
+    
+    # Usamos un ThreadPoolExecutor para paralelizar las eliminaciones
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        for service_doc in all_services:
+            print(f"Limpiando servicio: {service_doc.id}...")
+            cleaned_this_service = False
+            
+            # Limpiar subcolección 'variants'
+            variants_ref = service_doc.reference.collection('variants')
+            deleted_variants = _delete_collection_in_batches(variants_ref, 100, executor)
+            if deleted_variants > 0:
+                total_subdocs_deleted += deleted_variants
+                cleaned_this_service = True
+                print(f"  -> {deleted_variants} variantes eliminadas.")
+            
+            # Limpiar subcolección 'subcategories'
+            subcategories_ref = service_doc.reference.collection('subcategories')
+            deleted_subcats = _delete_collection_in_batches(subcategories_ref, 100, executor)
+            if deleted_subcats > 0:
+                total_subdocs_deleted += deleted_subcats
+                cleaned_this_service = True
+                print(f"  -> {deleted_subcats} subcategorías eliminadas.")
+            
+            if cleaned_this_service:
+                services_cleaned += 1
+                
+    return {
+        "services_scanned": total_services_scanned,
+        "services_with_subcollections_cleaned": services_cleaned,
+        "total_subdocuments_deleted": total_subdocs_deleted
+    }
+

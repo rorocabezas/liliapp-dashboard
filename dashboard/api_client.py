@@ -6,16 +6,25 @@ import json
 API_BASE_URL = "http://127.0.0.1:8000/api/v1"
 
 def _handle_request(method: str, endpoint: str, **kwargs):
-    """Función de ayuda interna para manejar todas las llamadas a la API."""
+    """
+    Función de ayuda interna para manejar todas las llamadas a la API,
+    con manejo de errores mejorado para depuración.
+    """
     url = f"{API_BASE_URL}{endpoint}"
     try:
-        response = requests.request(method, url, **kwargs)
+        response = requests.request(method, url, timeout=10, **kwargs)
         response.raise_for_status()
         return response.json() if response.content else {"status": "success"}
     except requests.exceptions.HTTPError as e:
         st.error(f"Error de API: {e.response.status_code} - {e.response.text}")
+    except requests.exceptions.ConnectionError as e:
+        st.error(f"🔌 Error de Conexión: No se pudo conectar a {url}.")
+        st.error(f"   Detalle técnico: {repr(e)}")
+        st.warning("   ACCIÓN: Verifica que el servidor backend (FastAPI) esté corriendo y que tu Firewall/Antivirus no esté bloqueando la conexión al puerto 8000.")
+    except requests.exceptions.Timeout:
+        st.error(f"🔌 Error de Timeout: El servidor en {url} tardó demasiado en responder.")
     except requests.exceptions.RequestException as e:
-        st.error(f"Error de conexión con el backend: {e}")
+        st.error(f"Ocurrió un error de red inesperado: {e}")
     return None
 
 # --- Funciones de KPIs ---
@@ -105,3 +114,8 @@ def get_audit_data_for_service(service_id: int):
     
 def get_firestore_health_summary():
     return _handle_request("GET", "/audit/firestore-health")
+
+
+def clean_services_subcollections_api():
+    """Llama al endpoint para limpiar las subcolecciones de servicios."""
+    return _handle_request("POST", "/crud/services/clean-subcollections")
