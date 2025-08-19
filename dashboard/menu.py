@@ -76,6 +76,7 @@ def render_menu():
         st.page_link("pages/cargas.py", label="ETL Masivo", icon="⚙️")       
         st.page_link("pages/mapeo_jumpseller_a_servicio.py", label="Mapeo Jumpseller a Servicio", icon="🗺")
         st.page_link("pages/Mapeo_Jumpseller_a_Cliente.py", label="Mapeo Jumpseller a Cliente", icon="🗺️")
+        st.page_link("pages/schema_initializer.py", label="Inicializador de Esquema", icon="🏗️")
         st.markdown("---")
         #st.page_link("pages/Mapeo_de_servicios.py", label="Mapeo de Servicios", icon="🛠️")
         #st.page_link("pages/Mapeo_de_ordenes.py", label="Mapeo de Ordenes", icon="🔄")

@@ -10,6 +10,13 @@ En esta nueva etapa, vamos a habilitar el acceso a los **clientes finales**. El 
 
 Para lograrlo, implementaremos una nueva estructura en nuestra base de datos y diseñaremos flujos de usuario intuitivos, enfocados en la confianza y la facilidad de uso. Si ya tenemos una excelente experiencia para los **profesionales**, ahora es el turno de crear una experiencia igual de sólida para los **clientes**.
 
+
+Construir un marketplace de servicios completo donde los clientes puedan:
+1.  Registrarse y gestionar su perfil.
+2.  Comprar servicios de un catálogo estándar.
+3.  Solicitar, recibir y aceptar presupuestos para trabajos personalizados.
+4.  Gestionar y calificar sus órdenes.
+
 ## 🎨 Guía para el Equipo de UX/UI
 
 ### Pantalla de Perfil de Usuario 
@@ -293,7 +300,10 @@ graph LR
 
 
 ##  💻Guía para el Equipo de Desarrollo  
-### Modelo de Base de Datos  
+### Modelo de Base de Datos en Firestore
+
+👤 Entidades de Usuario
+
 
 #### 📁 Colección `users` 
 ```typescript
@@ -504,6 +514,68 @@ interface Cart {
   abandonedAt?: Timestamp; // Cuándo se marcó como abandonado
 }
 ```
+## Arquitectura para Presupuestos Personalizados
+💡 Nueva Colección: `quote_requests`
+Almacena la solicitud inicial del cliente.
+
+```typescript
+// Ruta: quote_requests/{requestId}
+interface QuoteRequest {
+  id: string; // ID autogenerado de Firestore para la solicitud.
+  customerId: string; // ID del usuario (de la colección 'users') que hizo la solicitud.
+  status: 'pending_review' | 'in_progress' | 'completed'; // Estado del proceso de la solicitud en general.
+  description: string; // Texto original del cliente describiendo lo que necesita.
+  images?: string[]; // URLs a imágenes que el cliente adjuntó para dar contexto.
+  requestedAt: Timestamp; // Fecha y hora en que el cliente envió la solicitud.
+}
+```
+
+## 🧾 Nueva Colección: `quotes`
+Contiene las diferentes propuestas u ofertas para una solicitud.
+
+```typescript
+// Ruta: quotes/{quoteId}
+interface Quote {
+  id: string; // ID autogenerado de Firestore para este presupuesto específico.
+  requestId: string; // Referencia al ID de la 'quote_requests' original.
+  customerId: string; // ID del cliente (denormalizado para facilitar consultas).
+  professionalId?: string; // ID del profesional que preparó o ejecutará el presupuesto.
+  status: 'draft' | 'sent' | 'accepted' | 'rejected' | 'expired'; // Ciclo de vida de la oferta.
+  
+  title: string; // Título descriptivo del presupuesto (ej: "Remodelación Baño Principal").
+  scopeDescription: string; // Descripción detallada del trabajo a realizar por el profesional.
+  
+  lineItems: {
+    activities: Array<{ description: string; price: number; }>; // Desglose de las tareas o mano de obra.
+    materials: Array<{ description:string; quantity: number; price: number; }>; // ej: "Desinstalar WC antiguo", "Instalar cerámica".
+  };
+  
+  totalAmount: number; // El costo final y total que el cliente debe pagar.
+  validUntil: Timestamp; // Fecha de expiración de esta oferta.
+  
+  createdAt: Timestamp; // Fecha en que se creó este documento de presupuesto.
+  updatedAt: Timestamp; // Última fecha de modificación.
+  convertedToOrderId?: string; // Si es aceptado, aquí se guarda el ID de la 'orders' generada.
+}
+```
+
+✨ Nueva Colección: `custom_services`
+Almacena la versión "congelada" de un presupuesto aceptado.
+
+```typescript
+// Ruta: custom_services/{customServiceId}
+interface CustomService {
+  id: string; // ID autogenerado de Firestore.
+  quoteId: string; // Referencia a la 'quotes' que originó este servicio.
+  customerId: string; // ID del cliente.
+  name: string; // Nombre del servicio para mostrar en la orden (ej: "Presupuesto #1180")
+  description: string; // El `scopeDescription` del presupuesto original.
+  price: number; // El `totalAmount` del presupuesto original.
+  details: { activities: string[]; materials: string[]; }; // Un resumen simple para referencia rápida. // ["Desinstalar WC antiguo", "Instalar cerámica"] // ["Adhesivo para cerámica", "Tubería PVC"]
+  createdAt: Timestamp; // Fecha en que el presupuesto fue aceptado y se creó este servicio.
+}
+```
+
 
 ###  Colección `📦 Órdenes`
 ```typescript
@@ -571,7 +643,37 @@ interface ActivityLog {
   details?: object; // Contexto adicional en formato JSON
 }
 ```
-### Diagrama en dbdiagram.io
+
+📦 Colección `orders` (Modificada)
+Se actualiza para incluir ítems de servicios personalizados.
+
+```typescript
+// Ruta: orders/{orderId}
+interface Order {
+  // ... (id, customerId, total, status, etc. no cambian)
+  
+  orderType: 'standard_service' | 'custom_quote'; // <-- NUEVO CAMPO // Campo clave para diferenciar el tipo de orden.
+  
+  items: Array<{
+     // --- Campos para servicios estándar del catálogo ---
+    serviceId?: string;  // ID de la colección 'services'.
+    variantId?: string;  // ID de la subcolección 'variants'.
+    
+    // --- Para servicios personalizados ---
+    customServiceId?: string; // Apunta al ID de la colección 'custom_services'.
+    lineItems?: object; // <-- NUEVO CAMPO // Copia de 'quote.lineItems' para que la orden sea un recibo autocontenido.
+    
+    // Campos comunes
+    serviceName: string; // Nombre del servicio o del presupuesto.
+    quantity: number; // Siempre 1 para presupuestos.
+    price: number; // Precio final del ítem.
+  }>;
+  
+  // ... (el resto de los campos no cambia)
+}
+```
+
+
 
 
 ### 🔗  Diagrama de Relaciones
@@ -621,6 +723,32 @@ classDiagram
     Order "1" -- "*" Variant : "contiene"
 
 ```
+
+### 🔗 Diagrama de Relaciones Final
+
+```mermaid
+classDiagram
+    direction LR
+
+    class User { <<Collection>> }
+    class CustomerProfile { <<Subcollection>> }
+    class Service { <<Collection>> }
+    class Variant { <<Subcollection>> }
+    class Order { <<Collection>> }
+    class QuoteRequest { <<Collection>> }
+    class Quote { <<Collection>> }
+    class CustomService { <<Collection>> }
+
+    User "1" -- "1" CustomerProfile : "tiene"
+    CustomerProfile "1" -- "*" QuoteRequest : "crea"
+    QuoteRequest "1" -- "*" Quote : "recibe"
+    Quote "1" -- "1" CustomService : "se convierte en"
+    CustomService "1" -- "1" Order : "genera"
+
+    Order "1" -- "*" Variant : "puede contener"
+```
+
+---
 
 ### Descripción de Relaciones
 

@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     JUMPSELLER_LOGIN: str
     JUMPSELLER_AUTHTOKEN: str
     API_BASE_URL: str 
+    
     # Configuración de Firebase
     FIREBASE_TYPE: str
     FIREBASE_PROJECT_ID: str
@@ -21,13 +22,15 @@ class Settings(BaseSettings):
     FIREBASE_TOKEN_URI: str
     FIREBASE_AUTH_PROVIDER_X509_CERT_URL: str
     FIREBASE_CLIENT_X509_CERT_URL: str
-
-
     FIREBASE_API_KEY: str
-    PORT: int
+    FIREBASE_WEB_API_KEY: str
     
-    # Configuración para que Pydantic lea desde un archivo .env
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding='utf-8')
+    PORT: int = 8080
+    
+    model_config = SettingsConfigDict(env_file=".env")
 
-# Creamos una única instancia que será usada en toda la aplicación
+    def get_private_key(self) -> str:
+        """Convierte los \\n en saltos de línea reales"""
+        return self.FIREBASE_PRIVATE_KEY.replace('\\n', '\n')
+
 settings = Settings()

@@ -101,21 +101,21 @@ def transform_single_product(product: Dict[str, Any]) -> Tuple[Dict, Dict, List[
         })
     
     # Ensamblado del Documento de Servicio Final
-    service_data = {
+    service_payload = {
         "id": product_id,
         "name": product.get("name"),
         "description": _clean_html(product.get("description", "")),
-        "categoryId": category_id,
         "price": product.get("price", 0.0),
         "status": 'active' if product.get("status") == 'available' else 'inactive',
         "createdAt": _parse_utc_string(product.get("created_at")),
-        "hasVariants": len(variants_data) > 0,
-        "hasSubcategories": len(subcategories_data) > 0, 
+        "imageUrl": image_url,
+        "category": category_reference,
+        "subcategories": subcategories_references,
+        "questions": [] if 'questions' not in locals() else questions,
+        "variants": [] if 'variants_list' not in locals() else variants_list,
+        "requirements": requirements if 'requirements' in locals() else {},
         "stats": {"viewCount": 0, "purchaseCount": 0, "averageRating": 0.0}
     }
-    
-    return service_data, category_data, variants_data, subcategories_data
-
 def transform_single_order(order: Dict[str, Any]) -> Tuple[Dict, Dict, Dict, Dict]:
     if not order: return None, None, None, None
     customer_data = order.get("customer") or {}
@@ -277,17 +277,56 @@ def transform_product_to_service_model(product: Dict[str, Any]) -> Tuple[Dict, L
         category_reference = {"id": str(main_cat.get("id"))}
         # No hay subcategorías en este caso.
 
-    # Lógica de extracción de variantes
-    variants_array = []
+    # --- Mejor práctica: variantes como combinaciones de respuestas ---
+    base_price = product.get("price", 0.0)
+    questions_dict = {}
+    variants_list = []
+
+    # --- Nueva lógica: cada variante es una combinación de respuestas ---
     for variant in product.get("variants", []):
-        options = variant.get("options", [{}])[0]
-        variants_array.append({
-            "id": str(variant.get("id")),
-            "price": variant.get("price", 0.0),
-            "options": {"name": options.get("name"), "value": options.get("value")},
-            "sku": variant.get("sku"),
-            "stock": variant.get("stock")
-        })
+        variant_id = str(variant.get("id"))
+        variant_price = variant.get("price", base_price)
+        variant_stock = variant.get("stock", 0)
+        variant_sku = variant.get("sku")
+        answers = {}
+        options = variant.get("options", [])
+        for opt in options:
+            question = opt.get("name", "").strip()
+            value = opt.get("value", "").strip()
+            if not question or not value:
+                continue
+            question_id = "_".join(question.lower().replace("?","").replace("¿","").replace("á","a").replace("é","e").replace("í","i").replace("ó","o").replace("ú","u").split())
+            answers[question_id] = value
+            # Guarda la pregunta y sus opciones
+            if question_id not in questions_dict:
+                questions_dict[question_id] = {
+                    "id": question_id,
+                    "question": question,
+                    "options": set()
+                }
+            questions_dict[question_id]["options"].add(value)
+        # Guarda la variante como combinación de respuestas
+        if answers:
+            variants_list.append({
+                "variantId": variant_id,
+                "answers": answers,
+                "price": variant_price,
+                "stock": variant_stock,
+                "sku": variant_sku
+            })
+
+    # Convierte los sets de opciones a listas
+    questions = []
+    for q in questions_dict.values():
+        q["options"] = sorted(list(q["options"]))
+        questions.append(q)
+
+    # Extrae requisitos del HTML si lo deseas (puedes mejorar esto)
+    requirements = {
+        "spaceRequirements": ["El espacio debe estar libre de obstáculos"],
+        "documentation": ["Enviar fotos o videos del lugar e inodoro a instalar"],
+        "exclusions": ["No incluye retiro de escombros ni materiales antiguos"]
+    }
 
     # Lógica de extracción de imagen segura
     images = product.get("images", [])
@@ -304,7 +343,9 @@ def transform_product_to_service_model(product: Dict[str, Any]) -> Tuple[Dict, L
         "imageUrl": image_url,
         "category": category_reference,
         "subcategories": subcategories_references,
-        "variants": variants_array,
+        "questions": questions,
+        "variants": variants_list,
+        "requirements": requirements,
         "stats": {"viewCount": 0, "purchaseCount": 0, "averageRating": 0.0}
     }
     
@@ -319,6 +360,34 @@ def transform_product_to_service_model(product: Dict[str, Any]) -> Tuple[Dict, L
 
     return service_payload, categories_found
 
+
+# --- Función para actualizar solo las variantes de un servicio ---
+def transform_variants_only(product: Dict[str, Any]) -> List[Dict]:
+    """
+    Transforma solo las variantes de un producto al nuevo formato agrupado.
+    """
+    variants_by_question = {}
+    for variant in product.get("variants", []):
+        options = variant.get("options", [{}])[0]
+        question = options.get("name", "")
+        if not question:
+            continue
+            
+        if question not in variants_by_question:
+            variants_by_question[question] = {
+                "question": question,
+                "options": []
+            }
+            
+        variants_by_question[question]["options"].append({
+            "value": options.get("value"),
+            "price": variant.get("price", 0.0),
+            "sku": variant.get("sku"),
+            "stock": variant.get("stock"),
+            "variantId": str(variant.get("id"))
+        })
+    
+    return list(variants_by_question.values())
 
 # --- Función para Transformar Múltiples Productos al Modelo 'Service-Híbrido' ---
 def transform_products_for_service_model(source_products: List[Dict[str, Any]], logger) -> Tuple[List[Dict], List[Dict]]:

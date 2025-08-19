@@ -315,6 +315,17 @@ def create_document(collection_name: str, data: Dict[str, Any], doc_id: str = No
     doc_ref.set(data)
     return doc_ref.id
 
+def get_document(collection_name, doc_id):
+    """
+    Obtiene un documento por ID en la colección especificada. Devuelve None si no existe.
+    """
+    db = get_db_client()
+    doc_ref = db.collection(collection_name).document(doc_id)
+    doc = doc_ref.get()
+    if doc.exists:
+        return doc.to_dict()
+    return None
+
 # --- CRUD para Colección 'customers' (Modelo Nuevo) ---
 def get_all_customers() -> List[Dict[str, Any]]:
     return get_all_documents("customers")
@@ -492,3 +503,116 @@ def clean_services_subcollections() -> dict:
         "total_subdocuments_deleted": total_subdocs_deleted
     }
 
+def clean_collection(collection_name: str) -> dict:
+    """Elimina TODOS los documentos de una colección de nivel superior."""
+    db = get_db_client()
+    coll_ref = db.collection(collection_name)
+    deleted_count = 0
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        while True:
+            docs_batch = coll_ref.limit(100).stream()
+            docs_to_delete = list(docs_batch)
+            if not docs_to_delete: break
+            futures = [executor.submit(doc.reference.delete) for doc in docs_to_delete]
+            for future in futures: future.result()
+            deleted_count += len(docs_to_delete)
+            print(f"Borrados {deleted_count} documentos de '{collection_name}'...")
+    return {"collection_cleaned": collection_name, "total_documents_deleted": deleted_count}
+
+
+# --- Para creación de colecciones presupuesto personalizado en firestore ---
+def initialize_quote_schema_with_samples() -> Dict[str, str]:
+    """
+    Crea las colecciones de presupuestos si no existen y añade un conjunto
+    de documentos de ejemplo para demostrar el flujo completo.
+    DEVUELVE LOS IDs de los documentos creados.
+    """
+    db = get_db_client()
+    now = datetime.now()
+
+    # --- IDs de ejemplo (simulamos un usuario y una categoría existentes) ---
+    # En una demo real, podrías obtener un usuario y categoría reales de tu DB
+    sample_customer_id = "sample_customer_123"
+    sample_category_id = "sample_category_gasfiteria"
+
+    # --- 1. Crear una Solicitud de Presupuesto (QuoteRequest) de ejemplo ---
+    req_ref = db.collection('quote_requests').document()
+    request_data = {
+        "customerId": sample_customer_id,
+        "categoryId": sample_category_id,
+        "categoryName": "Gasfitería",
+        "status": 'in_progress',
+        "description": "Necesito reparar una fuga de agua debajo del lavaplatos. Adjunto foto.",
+        "images": ["https://via.placeholder.com/150"],
+        "quoteIds": [], # Se actualizará después
+        "requestedAt": now
+    }
+    req_ref.set(request_data)
+    
+    # --- 2. Crear un Presupuesto (Quote) de ejemplo para esa solicitud ---
+    quote_ref = db.collection('quotes').document()
+    quote_data = {
+        "requestId": req_ref.id,
+        "customerId": sample_customer_id,
+        "categoryId": sample_category_id,
+        "professionalId": "sample_professional_456",
+        "status": 'sent',
+        "title": "Reparación de Fuga en Lavaplatos",
+        "scopeDescription": "Se procederá a revisar la conexión del sifón, reemplazar sellos y verificar la presión del agua.",
+        "lineItems": {
+            "activities": [{"description": "Visita técnica y diagnóstico", "price": 20000}],
+            "materials": [{"description": "Sello de goma para sifón", "quantity": 1, "price": 5000}]
+        },
+        "totalAmount": 25000,
+        "validUntil": now + timedelta(days=7),
+        "createdAt": now,
+        "updatedAt": now
+    }
+    quote_ref.set(quote_data)
+    
+    # Actualizamos la solicitud con el ID del presupuesto creado
+    req_ref.update({"quoteIds": [quote_ref.id]})
+    
+    # --- 3. Simular la aceptación y crear un Servicio Personalizado (CustomService) ---
+    custom_service_ref = db.collection('custom_services').document()
+    custom_service_data = {
+        "quoteId": quote_ref.id,
+        "customerId": sample_customer_id,
+        "categoryId": sample_category_id,
+        "name": f"Presupuesto Personalizado #{quote_ref.id[:5]}",
+        "description": quote_data["scopeDescription"],
+        "price": quote_data["totalAmount"],
+        "details": {
+            "activities": [item['description'] for item in quote_data['lineItems']['activities']],
+            "materials": [item['description'] for item in quote_data['lineItems']['materials']]
+        },
+        "createdAt": now
+    }
+    custom_service_ref.set(custom_service_data)
+
+    # --- 4. Simular la creación de la Orden ---
+    order_ref = db.collection('orders').document()
+    order_data = {
+        "customerId": sample_customer_id,
+        "orderType": 'custom_quote',
+        "total": custom_service_data["price"],
+        "status": "pending_payment",
+        "createdAt": now,
+        "updatedAt": now,
+        "items": [{
+            "customServiceId": custom_service_ref.id,
+            "serviceName": custom_service_data["name"],
+            "quantity": 1,
+            "price": custom_service_data["price"],
+            "lineItems": quote_data["lineItems"]
+        }],
+        # ... (otros campos de la orden como paymentDetails, etc. serían None al inicio)
+    }
+    order_ref.set(order_data)
+
+    return {
+        "quote_request_id": req_ref.id,
+        "quote_id": quote_ref.id,
+        "custom_service_id": custom_service_ref.id,
+        "order_id": order_ref.id
+    }

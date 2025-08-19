@@ -57,18 +57,24 @@ if selected_product_id:
     
     # --- Llamada a la Lógica de Transformación ---
     service_doc, categories_docs = transform_product_to_service_model(source_product)
-    
-    # --- Visualización ---
+
+    # --- Visualización Mejorada ---
     st.markdown("---")
-    col1, col2 = st.columns(2, gap="large")
+    col1, col2, col3 = st.columns([1, 1, 1], gap="large")
 
     with col1:
         st.subheader("⬅️ Origen: Producto de Jumpseller")
         st.json(source_product, expanded=False)
 
     with col2:
-        st.subheader("➡️ Destino: Documentos en Firestore")
-        
+        st.subheader("🔎 Mapeo de Variantes y Preguntas")
+        st.markdown("#### Preguntas (`questions`)")
+        st.json(service_doc.get("questions", []))
+        st.markdown("#### Variantes (`variants`)")
+        st.json(service_doc.get("variants", []))
+
+    with col3:
+        st.subheader("➡️ Destino: Documento en Firestore")
         st.markdown("#### 📄 Documento para `services/{serviceId}`")
         st.info("Observa que `category` y `subcategories` solo contienen el **ID** de referencia.")
         st.json(service_doc)

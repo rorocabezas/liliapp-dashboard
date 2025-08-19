@@ -3,6 +3,7 @@ import uvicorn
 from fastapi import FastAPI
 import firebase_admin
 from firebase_admin import credentials
+from fastapi.middleware.cors import CORSMiddleware
 
 
 # 1. Importa la instancia de configuración
@@ -30,6 +31,16 @@ cred = credentials.Certificate(cred_dict)
 firebase_admin.initialize_app(cred)
 
 app = FastAPI(title="LiliApp BI API")
+
+# Configura CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:8501"],  # URL de Streamlit
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 # Incluir las rutas de los KPIs
 app.include_router(kpis.router, prefix="/api/v1/kpis", tags=["KPIs"])

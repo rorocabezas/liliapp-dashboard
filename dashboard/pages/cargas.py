@@ -6,8 +6,11 @@ import datetime
 # --- Importaciones ---
 from dashboard.auth import check_login
 from dashboard.menu import render_menu
-from dashboard.api_client import clean_services_subcollections_api
-
+# --- CAMBIO 1: Añadir 'clean_collection_api' a las importaciones ---
+from dashboard.api_client import (
+    clean_services_subcollections_api, 
+    clean_collection_api
+)
 from dashboard.api_client import (
     get_all_jumpseller_orders, 
     get_all_jumpseller_products, 
@@ -207,16 +210,66 @@ st.markdown("---")
 st.subheader("🛠️ Herramientas de Mantenimiento de Datos")
 st.warning("PRECAUCIÓN: Las siguientes operaciones modifican o eliminan datos de forma masiva.", icon="⚠️")
 
-if st.button("🧹 Iniciar Limpieza de Subcolecciones de Servicios", 
-             help="Elimina las subcolecciones 'variants' y 'subcategories' de TODOS los servicios. Este proceso se ejecuta en segundo plano y puede tardar varios minutos.",
-             type="secondary"):
-    
-    # La interacción con el usuario ahora es instantánea
-    st.info("Enviando solicitud para iniciar el proceso de limpieza...")
-    result = clean_services_subcollections_api()
-    
-    if result and result.get("status") == "accepted":
-        st.success("✅ ¡Solicitud aceptada! El proceso de limpieza ha comenzado en el servidor.")
-        st.caption("Puedes monitorear el progreso en la consola del backend. La limpieza puede tardar varios minutos en completarse.")
-    else:
-        st.error("Ocurrió un error al intentar iniciar el proceso. Revisa los logs del backend.")
+col1, col2 = st.columns(2)
+
+with col1:
+    if st.button("🔄 Actualizar solo variantes y preguntas (prueba 10 servicios)", type="primary", use_container_width=True, key="update_variants_questions_test"):
+        st.info("Actualizando solo los campos 'variants' y 'questions' en los primeros 10 servicios...")
+        raw_data_nested = get_all_jumpseller_products(status="available")
+        raw_data = [item['product'] for item in raw_data_nested if item.get('product')]
+        from etl.modules.transform import transform_product_to_service_model
+        from backend.services.firestore_service import update_document
+        for product in raw_data[:10]:
+            service_doc, _ = transform_product_to_service_model(product)
+            service_id = str(service_doc.get("id"))
+            update_document("services", service_id, {
+                "variants": service_doc.get("variants", []),
+                "questions": service_doc.get("questions", [])
+            })
+        st.success("¡Actualización de prueba realizada para los primeros 10 servicios!")
+
+    if st.button("🔄 Actualizar variantes y preguntas en TODOS los servicios", type="primary", use_container_width=True, key="update_variants_questions_all"):
+        st.info("Actualizando solo los campos 'variants' y 'questions' en TODOS los servicios...")
+        raw_data_nested = get_all_jumpseller_products(status="available")
+        raw_data = [item['product'] for item in raw_data_nested if item.get('product')]
+        from etl.modules.transform import transform_product_to_service_model
+        from backend.services.firestore_service import update_document, get_document
+        updated_count = 0
+        skipped_count = 0
+        for product in raw_data:
+            service_doc, _ = transform_product_to_service_model(product)
+            service_id = str(service_doc.get("id"))
+            # Verifica si el documento existe antes de actualizar
+            if get_document("services", service_id) is not None:
+                update_document("services", service_id, {
+                    "variants": service_doc.get("variants", []),
+                    "questions": service_doc.get("questions", [])
+                })
+                updated_count += 1
+            else:
+                skipped_count += 1
+                st.warning(f"El servicio {service_id} no existe en Firestore. Se omitió.")
+        st.success(f"¡Actualización masiva realizada! {updated_count} servicios actualizados, {skipped_count} omitidos.")
+
+    if st.button("🧹 Limpiar Subcolecciones de Servicios", 
+                 help="Elimina las subcolecciones 'variants' y 'subcategories' de TODOS los servicios. Ideal para migrar del modelo normalizado al híbrido.",
+                 type="secondary", use_container_width=True, key="clean_subcollections"):
+        st.info("Enviando solicitud para limpiar subcolecciones...")
+        result = clean_services_subcollections_api()
+        if result and result.get("status") == "accepted":
+            st.success("✅ ¡Solicitud aceptada! La limpieza ha comenzado en el servidor.")
+            st.caption("Monitorea el progreso en la consola del backend.")
+        else:
+            st.error("Ocurrió un error al iniciar el proceso.")
+
+with col2:
+    if st.button("🗑️ Limpiar Colección de Categorías", 
+                 help="Elimina TODOS los documentos de la colección 'categories'. Útil antes de una resincronización completa.",
+                 type="primary", use_container_width=True, key="clean_categories"):
+        st.info("Enviando solicitud para limpiar la colección 'categories'...")
+        result = clean_collection_api("categories")
+        if result and result.get("status") == "accepted":
+            st.success("✅ ¡Solicitud aceptada! La limpieza de 'categories' ha comenzado en el servidor.")
+            st.caption("Monitorea el progreso en la consola del backend.")
+        else:
+            st.error("Ocurrió un error al iniciar el proceso.")

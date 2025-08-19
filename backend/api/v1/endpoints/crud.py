@@ -328,3 +328,46 @@ def clean_services_subcollections_endpoint(background_tasks: BackgroundTasks):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"No se pudo iniciar la tarea de limpieza: {str(e)}")
+    
+
+# --- NUEVO ENDPOINT PARA LIMPIAR COLECCIONES COMPLETAS ---
+@router.post("/collections/{collection_name}/clean", 
+             summary="[PELIGRO] Limpiar todos los documentos de una colección",
+             status_code=202)
+def clean_collection_endpoint(collection_name: str, background_tasks: BackgroundTasks):
+    """
+    Inicia una tarea en segundo plano para eliminar TODOS los documentos
+    de una colección especificada. ¡USAR CON MÁXIMO CUIDADO!
+    """
+    # Lista de colecciones seguras para limpiar. Evita borrar 'customers' o 'users' por accidente.
+    SAFE_TO_CLEAN = ["categories", "services"] 
+    if collection_name not in SAFE_TO_CLEAN:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"La limpieza de la colección '{collection_name}' no está permitida por seguridad."
+        )
+
+    try:
+        # Añadimos la función de servicio a la cola de tareas en segundo plano
+        background_tasks.add_task(firestore_service.clean_collection, collection_name)
+        
+        # Devolvemos una respuesta inmediata
+        return {
+            "status": "accepted",
+            "message": f"El proceso de limpieza para la colección '{collection_name}' se ha iniciado en segundo plano. Monitorea los logs del backend."
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"No se pudo iniciar la tarea de limpieza: {str(e)}")
+
+# --- ENDPOINT PARA INICIALIZAR EL ESQUEMA DE PRESUPUESTOS Personalizados ---
+@router.post("/admin/initialize-quote-schema", summary="Inicializa el esquema de presupuestos", tags=["Admin Tools"])
+def initialize_schema_endpoint():
+    """
+    Crea las colecciones de presupuestos y añade documentos de ejemplo.
+    ¡USAR CON PRECAUCIÓN!
+    """
+    try:
+        created_ids = firestore_service.initialize_quote_schema_with_samples()
+        return {"status": "success", "message": "Esquema inicializado con datos de ejemplo.", "created_ids": created_ids}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al inicializar el esquema: {e}")

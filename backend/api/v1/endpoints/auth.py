@@ -33,8 +33,24 @@ async def login_for_access_token(user_credentials: UserLogin):
     email = user_credentials.email
     password = user_credentials.password
 
-    try:        
-        user = auth.get_user_by_email(user_credentials.email)
+    try:
+        # Primero verificamos la contraseña usando la API REST de Firebase
+        import requests
+        firebase_api_key = settings.FIREBASE_WEB_API_KEY  # Debes agregar esta configuración
+        auth_url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={firebase_api_key}"
+        
+        auth_response = requests.post(auth_url, json={
+            "email": email,
+            "password": password,
+            "returnSecureToken": True
+        })
+        
+        if auth_response.status_code != 200:
+            raise HTTPException(status_code=401, detail="Credenciales inválidas.")
+            
+        # Si llegamos aquí, la autenticación fue exitosa
+        # Ahora obtenemos el usuario completo y creamos el token personalizado
+        user = auth.get_user_by_email(email)
         user_role = firestore_service.get_user_role(user.uid)
 
         custom_token = auth.create_custom_token(user.uid)
@@ -44,10 +60,10 @@ async def login_for_access_token(user_credentials: UserLogin):
             "custom_token": custom_token.decode('utf-8'), 
             "uid": user.uid,
             "role": user_role,
-            "email": user.email # También devolvemos el email para mostrarlo
+            "email": user.email 
         }
     except Exception as e:
         raise HTTPException(
             status_code=401,
-            detail="Credenciales inválidas.",
+            detail=f"Credenciales inválidas. {str(e) if settings.DEBUG else ''}",
         )

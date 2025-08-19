@@ -90,7 +90,7 @@ graph TD
 
 ### 2. Flujo de Datos: `Products` de Jumpseller hacia `Services`
 
-Un **Producto** de Jumpseller se transforma en un **documento de servicio autocontenido** que utiliza un modelo **híbrido**: anida datos que no cambian (variantes) y referencias a datos que sí pueden cambiar (categorías).
+Un **Producto** de Jumpseller se transforma en un **documento de servicio autocontenido** que utiliza un modelo **híbrido**: anida datos que no cambian (variantes y preguntas) y referencias a datos que sí pueden cambiar (categorías).
 
 #### Origen: Objeto `product` en Jumpseller
 
@@ -102,8 +102,60 @@ Un objeto product de la API de Jumpseller contiene información sobre el servici
 
 | Colección/Subcolección | Ruta del Documento | Campos Clave y Origen | Propósito |
 |------------------------|-------------------|----------------------|-----------|
-| `services` | `services/{product.id}` | **category** (Object): `{id: "..."}`<br>**subcategories** (Array): `[{id: "..."}, ...]`<br>**variants** (Array): `[{id: "...", price: ...}, ...]` | **Documento Híbrido**. Las **variantes** se anidan por completo. Las **categorías** y **subcategorías** se almacenan como un array de **referencias (solo IDs)** para mantener la consistencia de los datos. |
+| `services` | `services/{product.id}` | **category** (Object): `{id: "..."}`<br>**subcategories** (Array): `[{id: "..."}, ...]`<br>**questions** (Array): `[{id, question, options}]`<br>**variants** (Array): `[{variantId, answers, price, stock, sku}]` | **Documento Híbrido**. Las **preguntas** y **variantes** se anidan por completo. Las **categorías** y **subcategorías** se almacenan como un array de **referencias (solo IDs)** para mantener la consistencia de los datos. |
 | `categories` | `categories/{categories[0].id}` | **id, name, description**: `product.categories[n].*` | **Colección Normalizada**. Sigue siendo la **única fuente de la verdad** para los nombres y detalles de las categorías, garantizando el mantenimiento. |
+
+---
+
+### Ejemplo de documento de servicio en Firestore
+
+```json
+{
+  "id": "12345",
+  "name": "Instalación de Grifería",
+  "questions": [
+    {
+      "id": "desinstalar_griferia",
+      "question": "¿Debemos desinstalar la grifería actual?",
+      "options": ["Sí", "No"]
+    },
+    {
+      "id": "tipo_griferia",
+      "question": "¿Qué tipo de grifería deseas instalar?",
+      "options": ["Monomando", "Combinación", "Monoblock"]
+    }
+  ],
+  "variants": [
+    {
+      "variantId": "v1",
+      "answers": {
+        "desinstalar_griferia": "Sí",
+        "tipo_griferia": "Monomando"
+      },
+      "price": 35990,
+      "stock": 10
+    },
+    {
+      "variantId": "v2",
+      "answers": {
+        "desinstalar_griferia": "No",
+        "tipo_griferia": "Monomando"
+      },
+      "price": 32990,
+      "stock": 5
+    }
+    // ...más variantes
+  ],
+  "category": {"id": "1996465"},
+  "subcategories": [{"id": "2010043"}, {"id": "2282369"}],
+  "price": 32990,
+  "status": "active",
+  "createdAt": "2024-09-02T19:05:03Z",
+  "imageUrl": "https://...",
+  "requirements": { ... },
+  "stats": {"viewCount": 0, "purchaseCount": 0, "averageRating": 0.0}
+}
+```
 
 ---
 
@@ -114,7 +166,7 @@ Las siguientes colecciones son las que han sido pobladas por el proceso ETL y de
 ### Colecciones Principales
 
 - **`customers`** - Nuevo modelo desnormalizado para clientes
-- **`services`** - Nuevo modelo híbrido para servicios  
+- **`services`** - Nuevo modelo híbrido para servicios (con preguntas y variantes anidadas)
 - **`orders`** - Sin cambios, normalizado
 - **`categories`** - Sin cambios, normalizado
 
@@ -124,7 +176,10 @@ El modelo de datos ha evolucionado para optimizar los casos de uso de lectura m�
 
 1. **Modelo de Cliente (`customers`):** Se ha **desnormalizado** para incluir el array de direcciones. Esto permite cargar una página de perfil de usuario con una **sola lectura** de base de datos. El equipo debe estar consciente de que la lógica de carga (`load.py`) utiliza **transacciones** para añadir nuevas direcciones a este array de forma segura.
 
-2. **Modelo de Servicio (`services`):** Se ha adoptado un **modelo híbrido**. Las variantes se anidan, pero las categorías se **referencian por ID**. Esto garantiza que un cambio de nombre en una categoría solo requiere una actualización en la colección `categories`, manteniendo la consistencia de los datos. Para mostrar un servicio, la aplicación deberá hacer:
+2. **Modelo de Servicio (`services`):** Se ha adoptado un **modelo híbrido**. Las preguntas y variantes se anidan, pero las categorías se **referencian por ID**. Esto garantiza que un cambio de nombre en una categoría solo requiere una actualización en la colección `categories`, manteniendo la consistencia de los datos. Para mostrar un servicio, la aplicación deberá hacer:
    - Una lectura del documento de servicio
    - Una consulta para obtener los nombres de las categorías referenciadas
+   - Construir el formulario dinámico de variantes usando los campos `questions` y `variants`
+
+---
 

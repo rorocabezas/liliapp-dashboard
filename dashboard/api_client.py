@@ -115,7 +115,13 @@ def get_audit_data_for_service(service_id: int):
 def get_firestore_health_summary():
     return _handle_request("GET", "/audit/firestore-health")
 
-
+# --- Mantenimiento / Limpieza ---
 def clean_services_subcollections_api():
     """Llama al endpoint para limpiar las subcolecciones de servicios."""
     return _handle_request("POST", "/crud/services/clean-subcollections")
+
+def clean_collection_api(collection_name: str):
+    """
+    Llama al endpoint para limpiar todos los documentos de una colección completa.
+    """
+    return _handle_request("POST", f"/crud/collections/{collection_name}/clean")
