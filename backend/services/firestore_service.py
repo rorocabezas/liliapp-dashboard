@@ -31,7 +31,7 @@ def get_db_client():
 def _get_completed_orders_in_range(start_date: datetime, end_date: datetime) -> List[Dict[str, Any]]:
     """Función de ayuda para obtener todas las órdenes completadas en un rango de fechas."""
     db = get_db_client()
-    orders_query = db.collection('orders').where(filter=FieldFilter('status', '==', 'completed')).where(filter=FieldFilter('createdAt', '>=', start_date)).where(filter=FieldFilter('createdAt', '<=', end_date))
+    orders_query = db.collection('pedidos').where(filter=FieldFilter('status', '==', 'completed')).where(filter=FieldFilter('createdAt', '>=', start_date)).where(filter=FieldFilter('createdAt', '<=', end_date))
     return [doc.to_dict() for doc in orders_query.stream()]
 
 def get_user_role(uid: str) -> str:
@@ -48,6 +48,69 @@ def get_user_role(uid: str) -> str:
     
 # ===================================================================
 # ===                   FUNCIONES DE CÁLCULO DE KPIs              ===
+def get_basic_pedidos_kpis(start_date: datetime, end_date: datetime) -> Dict[str, Any]:
+    """
+    KPIs básicos para la colección 'pedidos':
+    - Total de pedidos
+    - Pedidos por estado
+    - Monto total vendido
+    - Pedidos por cliente
+    - Métodos de pago
+    - Pedidos por comuna
+    - Calificación promedio
+    """
+    db = get_db_client()
+    pedidos_query = db.collection('pedidos').where(filter=FieldFilter('createdAt', '>=', start_date)).where(filter=FieldFilter('createdAt', '<=', end_date))
+    pedidos_docs = [doc.to_dict() for doc in pedidos_query.stream()]
+    result = {
+        "total_pedidos": len(pedidos_docs),
+        "pedidos_por_estado": {},
+        "monto_total": 0,
+        "pedidos_por_cliente": {},
+        "metodos_pago": {},
+        "pedidos_por_comuna": {},
+        "calificacion_promedio": 0
+    }
+    if not pedidos_docs:
+        return result
+    import pandas as pd
+    df = pd.DataFrame(pedidos_docs)
+    # Pedidos por estado
+    if 'status' in df.columns:
+        result["pedidos_por_estado"] = df['status'].value_counts().to_dict()
+    # Monto total vendido
+    if 'total' in df.columns:
+        result["monto_total"] = df['total'].sum()
+    # Pedidos por cliente
+    if 'customerId' in df.columns:
+        result["pedidos_por_cliente"] = df['customerId'].value_counts().to_dict()
+    # Métodos de pago
+    if 'paymentDetails' in df.columns:
+        def get_tipo_pago(x):
+            if isinstance(x, dict):
+                return x.get('type', 'Desconocido')
+            return 'Desconocido'
+        df['metodo_pago'] = df['paymentDetails'].apply(get_tipo_pago)
+        result["metodos_pago"] = df['metodo_pago'].value_counts().to_dict()
+    # Pedidos por comuna
+    if 'serviceAddress' in df.columns:
+        def get_comuna(sa):
+            if isinstance(sa, dict):
+                return sa.get('commune', 'Desconocida')
+            return 'Desconocida'
+        df['comuna'] = df['serviceAddress'].apply(get_comuna)
+        result["pedidos_por_comuna"] = df['comuna'].value_counts().to_dict()
+    # Calificación promedio
+    if 'rating' in df.columns:
+        def get_stars(r):
+            if isinstance(r, dict):
+                return r.get('stars')
+            return None
+        ratings = df['rating'].dropna().apply(get_stars)
+        ratings = ratings.dropna().astype(float)
+        if not ratings.empty:
+            result["calificacion_promedio"] = ratings.mean()
+    return result
 # ===================================================================
 
 def get_acquisition_kpis(start_date: datetime, end_date: datetime) -> Dict[str, Any]:
@@ -176,7 +239,7 @@ def get_operations_kpis(start_date: datetime, end_date: datetime) -> Dict[str, A
     Calcula KPIs de operaciones y calidad de forma robusta.
     """
     db = get_db_client()
-    orders_query = db.collection('orders').where(filter=FieldFilter('createdAt', '>=', start_date)).where(filter=FieldFilter('createdAt', '<=', end_date))
+    orders_query = db.collection('pedidos').where(filter=FieldFilter('createdAt', '>=', start_date)).where(filter=FieldFilter('createdAt', '<=', end_date))
     all_orders = [doc.to_dict() for doc in orders_query.stream()]
     
     if not all_orders:
@@ -227,75 +290,250 @@ def get_operations_kpis(start_date: datetime, end_date: datetime) -> Dict[str, A
 
 def get_retention_kpis(start_date: datetime, end_date: datetime) -> Dict[str, Any]:
     """Calcula KPIs de retención."""
-    all_orders_docs = _get_completed_orders_in_range(start_date, end_date)
-    if not all_orders_docs: return {"ltv_clp": 0, "repurchase_rate": 0}
-    
-    df_orders = pd.DataFrame(all_orders_docs)
-    total_revenue = df_orders['total'].sum()
-    distinct_customers_who_purchased = df_orders['customerId'].nunique()
-    ltv_clp = total_revenue / distinct_customers_who_purchased if distinct_customers_who_purchased > 0 else 0
-    
-    customer_order_counts = df_orders.groupby('customerId').size()
-    repeat_customers = (customer_order_counts > 1).sum()
-    repurchase_rate = (repeat_customers / distinct_customers_who_purchased) * 100 if distinct_customers_who_purchased > 0 else 0
+    try:
+        # --- Obtener pedidos completados en el rango ---
+        all_orders_docs = _get_completed_orders_in_range(start_date, end_date)
+        if not all_orders_docs:
+            return {
+                "retention_30d": 0,
+                "clv": 0,
+                "mau": 0,
+                "repurchase_rate": 0,
+                "avg_orders_by_commune": {},
+                "retention_cohorts": pd.DataFrame(),
+                "rfm_segments": pd.DataFrame(),
+                "referred_pct": 0
+            }
 
-    return {"ltv_clp": round(ltv_clp, 2), "repurchase_rate": round(repurchase_rate, 2)}
+        df_orders = pd.DataFrame(all_orders_docs)
+        # --- CLV ---
+        total_revenue = df_orders['total'].sum() if 'total' in df_orders.columns else 0
+        distinct_customers = df_orders['customerId'].nunique() if 'customerId' in df_orders.columns else 0
+        clv = total_revenue / distinct_customers if distinct_customers > 0 else 0
+
+        # --- Tasa de Recompra ---
+        customer_order_counts = df_orders.groupby('customerId').size() if 'customerId' in df_orders.columns else pd.Series()
+        repeat_customers = (customer_order_counts > 1).sum() if not customer_order_counts.empty else 0
+        repurchase_rate = (repeat_customers / distinct_customers) * 100 if distinct_customers > 0 else 0
+
+        # --- Retención 30 días ---
+        db = get_db_client()
+        users_query = db.collection('users').stream()
+        users = {doc.id: doc.to_dict() for doc in users_query}
+        retention_30d = 0
+        if 'customerId' in df_orders.columns and 'createdAt' in df_orders.columns:
+            user_first_order = df_orders.groupby('customerId')['createdAt'].min()
+            user_signup = pd.Series({uid: u.get('createdAt') for uid, u in users.items()})
+            user_signup = pd.to_datetime(user_signup, utc=True, errors='coerce')
+            user_first_order = pd.to_datetime(user_first_order, utc=True, errors='coerce')
+            retention_mask = (user_first_order - user_signup).dt.days <= 30
+            retention_30d = retention_mask.sum() / len(user_signup) * 100 if len(user_signup) > 0 else 0
+
+        # --- MAU (Usuarios Activos Mensuales) ---
+        mau = 0
+        user_last_login = pd.Series({uid: u.get('lastLoginAt') for uid, u in users.items()})
+        user_last_login = pd.to_datetime(user_last_login, utc=True, errors='coerce')
+        if not user_last_login.empty:
+            month_start = pd.Timestamp(end_date.year, end_date.month, 1, tz='UTC')
+            mau = (user_last_login >= month_start).sum()
+
+        # --- Pedidos promedio por cliente por comuna ---
+        avg_orders_by_commune = {}
+        if 'customerId' in df_orders.columns and 'serviceAddress' in df_orders.columns:
+            df_orders['commune'] = df_orders['serviceAddress'].apply(lambda sa: sa.get('commune', 'Desconocida') if isinstance(sa, dict) else 'Desconocida')
+            commune_group = df_orders.groupby('commune')['customerId'].nunique()
+            orders_group = df_orders.groupby('commune').size()
+            avg_orders_by_commune = {commune: round(orders_group[commune] / commune_group[commune], 2) if commune_group[commune] > 0 else 0 for commune in commune_group.index}
+
+        # --- Cohortes de Retención (simplificado) ---
+        retention_cohorts = pd.DataFrame()
+        if 'customerId' in df_orders.columns and 'createdAt' in df_orders.columns:
+            df_orders['order_month'] = pd.to_datetime(df_orders['createdAt'], utc=True, errors='coerce').dt.to_period('M')
+            cohort_table = df_orders.groupby(['customerId', 'order_month']).size().unstack(fill_value=0)
+            retention_cohorts = cohort_table.apply(lambda x: x.gt(0).astype(int)).groupby(level=0).cumsum().groupby(level=0).max().value_counts().sort_index().to_frame('Clientes Retenidos')
+
+        # --- Segmentación RFM (simplificado) ---
+        rfm_segments = pd.DataFrame()
+        if 'customerId' in df_orders.columns and 'createdAt' in df_orders.columns and 'total' in df_orders.columns:
+            snapshot_date = end_date
+            rfm_df = df_orders.groupby('customerId').agg(
+                recency=('createdAt', lambda date: (snapshot_date - pd.to_datetime(date, utc=True).max()).days),
+                frequency=('customerId', 'count'),
+                monetary=('total', 'sum')
+            ).reset_index()
+            try:
+                rfm_df['R_score'] = pd.qcut(rfm_df['recency'], 4, labels=[4, 3, 2, 1], duplicates='drop')
+                rfm_df['F_score'] = pd.qcut(rfm_df['frequency'].rank(method='first'), 4, labels=[1, 2, 3, 4], duplicates='drop')
+                rfm_df['M_score'] = pd.qcut(rfm_df['monetary'].rank(method='first'), 4, labels=[1, 2, 3, 4], duplicates='drop')
+            except ValueError:
+                rfm_df['R_score'] = 1; rfm_df['F_score'] = 1; rfm_df['M_score'] = 1
+            rfm_df['RFM_score'] = rfm_df['R_score'].astype(str) + rfm_df['F_score'].astype(str) + rfm_df['M_score'].astype(str)
+            segment_map = {
+                r'[3-4][3-4][3-4]': '🏆 Campeones',
+                r'[3-4][1-2][1-4]': '💖 Leales',
+                r'[1-2][3-4][3-4]': '😮 En Riesgo',
+                r'[1-2][1-2][1-2]': '❄️ Hibernando'
+            }
+            rfm_df['Segmento'] = rfm_df['RFM_score'].replace(segment_map, regex=True)
+            rfm_segments = rfm_df.groupby('Segmento').size().reset_index(name='Clientes')
+
+        # --- Programa de Referidos ---
+        referred_pct = 0
+        referred_count = sum(1 for u in users.values() if u.get('acquisitionInfo', {}).get('referredBy'))
+        total_users = len(users)
+        if total_users > 0:
+            referred_pct = referred_count / total_users * 100
+
+        return {
+            "retention_30d": round(retention_30d, 2),
+            "clv": round(clv, 2),
+            "mau": int(mau),
+            "repurchase_rate": round(repurchase_rate, 2),
+            "avg_orders_by_commune": avg_orders_by_commune,
+            "retention_cohorts": retention_cohorts,
+            "rfm_segments": rfm_segments,
+            "referred_pct": round(referred_pct, 2)
+        }
+    except Exception as e:
+        print(f"ERROR en get_retention_kpis: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "retention_30d": 0,
+            "clv": 0,
+            "mau": 0,
+            "repurchase_rate": 0,
+            "avg_orders_by_commune": {},
+            "retention_cohorts": pd.DataFrame(),
+            "rfm_segments": pd.DataFrame(),
+            "referred_pct": 0
+        }
 
 
 def get_rfm_segmentation(start_date: datetime, end_date: datetime) -> Dict[str, Any]:
     """Realiza un análisis RFM para segmentar a los clientes en un período de tiempo."""
-    all_orders_docs = _get_completed_orders_in_range(start_date, end_date)
-
-    if not all_orders_docs:
-        return {"segment_distribution": {}, "sample_customers": {}}
-
-    orders_df = pd.DataFrame(all_orders_docs)
-    orders_df['createdAt'] = pd.to_datetime(orders_df['createdAt'], utc=True)
-    snapshot_date = end_date # Usamos el fin del rango como fecha de referencia
-    
-    rfm_df = orders_df.groupby('customerId').agg(
-        recency=('createdAt', lambda date: (snapshot_date - date.max()).days),
-        frequency=('id', 'count'),
-        monetary=('total', 'sum')
-    ).reset_index() # reset_index para tener customerId como columna
-    
-    # Manejo de qcut con posibles valores duplicados y pocos datos
     try:
-        rfm_df['R_score'] = pd.qcut(rfm_df['recency'], 4, labels=[4, 3, 2, 1], duplicates='drop')
-        rfm_df['F_score'] = pd.qcut(rfm_df['frequency'].rank(method='first'), 4, labels=[1, 2, 3, 4], duplicates='drop')
-        rfm_df['M_score'] = pd.qcut(rfm_df['monetary'].rank(method='first'), 4, labels=[1, 2, 3, 4], duplicates='drop')
-    except ValueError:
-        rfm_df['R_score'] = 1; rfm_df['F_score'] = 1; rfm_df['M_score'] = 1
-
-    # Asegurarnos de que las columnas de score existan antes de convertirlas a string
-    for score in ['R_score', 'F_score', 'M_score']:
-        if score not in rfm_df.columns: rfm_df[score] = 1
-            
-    rfm_df['RFM_score'] = rfm_df['R_score'].astype(str) + rfm_df['F_score'].astype(str) + rfm_df['M_score'].astype(str)
-    
-    segment_map = {
-        r'[3-4][3-4][3-4]': '🏆 Campeones',
-        r'[3-4][1-2][1-4]': '💖 Leales',
-        r'[1-2][3-4][3-4]': '😮 En Riesgo',
-        r'[1-2][1-2][1-2]': '❄️ Hibernando'
-    }
-    rfm_df['segment'] = rfm_df['RFM_score'].replace(segment_map, regex=True)
-    # Si un score no coincide con los patrones, se clasifica como 'Otros'
-    rfm_df.loc[~rfm_df['segment'].isin(segment_map.values()), 'segment'] = 'Otros'
-    
-    segment_distribution = rfm_df['segment'].value_counts().to_dict()
-    
-    # Para la muestra, enriquecemos con el email desde la colección 'customers'
-    db = get_db_client()
-    customers_docs = {doc.id: doc.to_dict() for doc in db.collection('customers').stream()}
-    rfm_df['email'] = rfm_df['customerId'].map(lambda cid: customers_docs.get(cid, {}).get('email', 'N/A'))
-
-    sample_customers = {
-        segment: rfm_df[rfm_df['segment'] == segment].head(5)[['customerId', 'email', 'recency', 'frequency', 'monetary']].to_dict('records') 
-        for segment in rfm_df['segment'].unique()
-    }
-    
-    return {"segment_distribution": segment_distribution, "sample_customers": sample_customers}
+        all_orders_docs = _get_completed_orders_in_range(start_date, end_date)
+        if not all_orders_docs:
+            return {
+                "specialties_distribution": {},
+                "region_distribution": {},
+                "cohort_distribution": {},
+                "ticket_distribution": {},
+                "rfm_segments": {},
+                "campaign_distribution": {},
+                "referred_pct": 0,
+                "churn_distribution": {},
+                "segment_distribution": {},
+                "sample_customers": {}
+            }
+        orders_df = pd.DataFrame(all_orders_docs)
+        # Segmentación por especialidad
+        specialties_dist = {}
+        if 'specialties' in orders_df.columns:
+            specialties_series = orders_df['specialties'].dropna().explode()
+            specialties_dist = specialties_series.value_counts().to_dict()
+        # Segmentación por región/comuna
+        region_dist = {}
+        if 'serviceAddress' in orders_df.columns:
+            region_series = orders_df['serviceAddress'].apply(lambda sa: sa.get('region', 'Desconocida') if isinstance(sa, dict) else 'Desconocida')
+            commune_series = orders_df['serviceAddress'].apply(lambda sa: sa.get('commune', 'Desconocida') if isinstance(sa, dict) else 'Desconocida')
+            region_dist = region_series.value_counts().to_dict()
+            for k, v in commune_series.value_counts().to_dict().items():
+                region_dist[f"Comuna: {k}"] = v
+        # Segmentación por antigüedad/cohorte
+        cohort_dist = {}
+        if 'createdAt' in orders_df.columns:
+            cohort_series = pd.to_datetime(orders_df['createdAt'], utc=True, errors='coerce').dt.to_period('M').value_counts().sort_index()
+            cohort_dist = {str(k): int(v) for k, v in cohort_series.items()}
+        # Segmentación por ticket promedio
+        ticket_dist = {}
+        if 'total' in orders_df.columns and 'customerId' in orders_df.columns:
+            ticket_avg = orders_df.groupby('customerId')['total'].mean()
+            bins = [0, 20000, 50000, 100000, 500000, float('inf')]
+            labels = ['<20K', '20K-50K', '50K-100K', '100K-500K', '>500K']
+            ticket_groups = pd.cut(ticket_avg, bins=bins, labels=labels)
+            ticket_dist = ticket_groups.value_counts().sort_index().to_dict()
+        # Segmentación RFM
+        snapshot_date = end_date
+        rfm_df = orders_df.groupby('customerId').agg(
+            recency=('createdAt', lambda date: (snapshot_date - pd.to_datetime(date, utc=True).max()).days),
+            frequency=('customerId', 'count'),
+            monetary=('total', 'sum')
+        ).reset_index()
+        try:
+            rfm_df['R_score'] = pd.qcut(rfm_df['recency'], 4, labels=[4, 3, 2, 1], duplicates='drop')
+            rfm_df['F_score'] = pd.qcut(rfm_df['frequency'].rank(method='first'), 4, labels=[1, 2, 3, 4], duplicates='drop')
+            rfm_df['M_score'] = pd.qcut(rfm_df['monetary'].rank(method='first'), 4, labels=[1, 2, 3, 4], duplicates='drop')
+        except ValueError:
+            rfm_df['R_score'] = 1; rfm_df['F_score'] = 1; rfm_df['M_score'] = 1
+        rfm_df['RFM_score'] = rfm_df['R_score'].astype(str) + rfm_df['F_score'].astype(str) + rfm_df['M_score'].astype(str)
+        segment_map = {
+            r'[3-4][3-4][3-4]': '🏆 Campeones',
+            r'[3-4][1-2][1-4]': '💖 Leales',
+            r'[1-2][3-4][3-4]': '😮 En Riesgo',
+            r'[1-2][1-2][1-2]': '❄️ Hibernando'
+        }
+        rfm_df['Segmento'] = rfm_df['RFM_score'].replace(segment_map, regex=True)
+        rfm_segments = rfm_df.groupby('Segmento').size().reset_index(name='Clientes')
+        # Efectividad de campañas
+        campaign_dist = {}
+        if 'acquisitionInfo' in orders_df.columns:
+            campaign_series = orders_df['acquisitionInfo'].apply(lambda ai: ai.get('campaign', 'Sin Campaña') if isinstance(ai, dict) else 'Sin Campaña')
+            campaign_dist = campaign_series.value_counts().to_dict()
+        # Programa de referidos
+        db = get_db_client()
+        users_query = db.collection('users').stream()
+        users = {doc.id: doc.to_dict() for doc in users_query}
+        referred_count = sum(1 for u in users.values() if u.get('acquisitionInfo', {}).get('referredBy'))
+        total_users = len(users)
+        referred_pct = referred_count / total_users * 100 if total_users > 0 else 0
+        # Predicción de churn (simplificado)
+        churn_dist = {}
+        if 'customerId' in orders_df.columns and 'createdAt' in orders_df.columns:
+            last_order = orders_df.groupby('customerId')['createdAt'].max()
+            last_order_dt = pd.to_datetime(last_order, utc=True, errors='coerce')
+            days_since_last = last_order_dt.apply(lambda d: (snapshot_date - d).days if pd.notnull(d) else None)
+            churn_bins = [0, 30, 90, 180, 365, float('inf')]
+            churn_labels = ['Activo (<30d)', 'En riesgo (30-90d)', 'Dormido (90-180d)', 'Hibernando (180-365d)', 'Perdido (>365d)']
+            churn_groups = pd.cut(days_since_last, bins=churn_bins, labels=churn_labels)
+            churn_dist = churn_groups.value_counts().sort_index().to_dict()
+        # Segmentación RFM para muestra de clientes
+        customers_docs = {doc.id: doc.to_dict() for doc in db.collection('customers').stream()}
+        rfm_df['email'] = rfm_df['customerId'].map(lambda cid: customers_docs.get(cid, {}).get('email', 'N/A'))
+        sample_customers = {
+            segment: rfm_df[rfm_df['Segmento'] == segment].head(5)[['customerId', 'email', 'recency', 'frequency', 'monetary']].to_dict('records') 
+            for segment in rfm_df['Segmento'].unique()
+        }
+        segment_distribution = rfm_df['Segmento'].value_counts().to_dict()
+        return {
+            "specialties_distribution": specialties_dist,
+            "region_distribution": region_dist,
+            "cohort_distribution": cohort_dist,
+            "ticket_distribution": ticket_dist,
+            "rfm_segments": rfm_segments,
+            "campaign_distribution": campaign_dist,
+            "referred_pct": round(referred_pct, 2),
+            "churn_distribution": churn_dist,
+            "segment_distribution": segment_distribution,
+            "sample_customers": sample_customers
+        }
+    except Exception as e:
+        print(f"ERROR en get_rfm_segmentation: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "specialties_distribution": {},
+            "region_distribution": {},
+            "cohort_distribution": {},
+            "ticket_distribution": {},
+            "rfm_segments": {},
+            "campaign_distribution": {},
+            "referred_pct": 0,
+            "churn_distribution": {},
+            "segment_distribution": {},
+            "sample_customers": {}
+        }
 
 # ===================================================================
 # ===             FUNCIONES GENÉRICAS DE CRUD (ADMIN)             ===

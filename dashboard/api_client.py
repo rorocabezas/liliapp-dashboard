@@ -28,6 +28,10 @@ def _handle_request(method: str, endpoint: str, **kwargs):
     return None
 
 # --- Funciones de KPIs ---
+def get_basic_pedidos_kpis(start_date: str, end_date: str):
+    """Obtiene los KPIs básicos de la colección 'pedidos'."""
+    params = {"start_date": start_date, "end_date": end_date}
+    return _handle_request("GET", "/kpis/basic-pedidos", params=params)
 def get_kpis(endpoint: str, start_date: str, end_date: str):
     """Función genérica para obtener todos los KPIs."""
     params = {"start_date": start_date, "end_date": end_date}

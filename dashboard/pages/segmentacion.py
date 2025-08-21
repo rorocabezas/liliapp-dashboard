@@ -15,8 +15,8 @@ check_login()
 render_menu()
 load_custom_css()
 
-st.title("🎯 Segmentación de Clientes (RFM)")
-st.markdown("Análisis de **R**ecencia, **F**recuencia y Valor **M**onetario para agrupar clientes en segmentos accionables.")
+st.title("🎯 Métricas de Segmentación y Marketing")
+st.markdown("KPIs para agrupar clientes por especialidad, región, antigüedad, ticket promedio, RFM, campañas y referidos.")
 
 # --- Filtros y Carga de Datos ---
 if 'date_range' not in st.session_state or len(st.session_state.date_range) != 2:
@@ -34,54 +34,111 @@ data = load_data(start_date_str, end_date_str)
 if not data:
     st.error("No se pudieron cargar los datos. Verifica el backend y la base de datos."); st.stop()
 
-# --- Visualización del Dashboard ---
 st.subheader(f"Análisis sobre órdenes completadas entre el {start_date_obj.strftime('%d/%m/%Y')} y el {end_date_obj.strftime('%d/%m/%Y')}")
 
-segment_dist = data.get("segment_distribution", {})
+# --- Segmentación por Especialidad ---
+st.subheader("🔧 Segmentación por Especialidad")
+specialties = data.get('specialties_distribution', {})
+if specialties:
+    df_spec = pd.DataFrame(list(specialties.items()), columns=['Especialidad', 'Pedidos'])
+    st.bar_chart(df_spec.set_index('Especialidad'), use_container_width=True)
+else:
+    st.info("No hay datos de especialidades.")
 
-if not segment_dist:
-    st.info("No hay suficientes datos de órdenes en este período para generar segmentos RFM.")
-    st.stop()
+# --- Segmentación por Región/Comuna ---
+st.subheader("🌎 Segmentación por Región/Comuna")
+region_dist = data.get('region_distribution', {})
+if region_dist:
+    df_region = pd.DataFrame(list(region_dist.items()), columns=['Región/Comuna', 'Pedidos'])
+    st.bar_chart(df_region.set_index('Región/Comuna'), use_container_width=True)
+else:
+    st.info("No hay datos de región/comuna.")
 
-# --- Gráfico de Distribución de Segmentos ---
-st.subheader("Distribución de Clientes por Segmento")
-df_dist = pd.DataFrame(list(segment_dist.items()), columns=['Segmento', 'Número de Clientes'])
-fig = px.bar(df_dist.sort_values('Número de Clientes', ascending=False), 
-             x='Segmento', y='Número de Clientes', 
-             title="Clientes por Segmento RFM", text_auto=True,
-             color='Segmento', color_discrete_map={
-                 '🏆 Campeones': '#FFD700', # Oro
-                 '💖 Leales': '#1E90FF',    # Azul
-                 '😮 En Riesgo': '#FF8C00', # Naranja oscuro
-                 '❄️ Hibernando': '#ADD8E6', # Azul claro
-                 'Otros': '#D3D3D3'     # Gris
-             })
-fig.update_layout(showlegend=False)
-st.plotly_chart(fig, use_container_width=True)
+# --- Segmentación por Antigüedad ---
+st.subheader("📅 Segmentación por Antigüedad")
+cohort_dist = data.get('cohort_distribution', {})
+if cohort_dist:
+    df_cohort = pd.DataFrame(list(cohort_dist.items()), columns=['Cohorte', 'Clientes'])
+    st.line_chart(df_cohort.set_index('Cohorte'), use_container_width=True)
+else:
+    st.info("No hay datos de cohortes de registro.")
 
-st.markdown("---")
+# --- Segmentación por Ticket Promedio ---
+st.subheader("💸 Segmentación por Ticket Promedio")
+ticket_dist = data.get('ticket_distribution', {})
+if ticket_dist:
+    df_ticket = pd.DataFrame(list(ticket_dist.items()), columns=['Nivel de Gasto', 'Clientes'])
+    st.bar_chart(df_ticket.set_index('Nivel de Gasto'), use_container_width=True)
+else:
+    st.info("No hay datos de ticket promedio.")
 
-# --- Muestra de Clientes por Segmento ---
-st.subheader("Muestra de Clientes por Segmento")
-st.caption("Una vista detallada de algunos clientes en cada grupo para entender su comportamiento.")
+# --- Segmentación RFM ---
+st.subheader("🎯 Segmentación RFM")
+rfm_segments = data.get('rfm_segments', pd.DataFrame())
+if isinstance(rfm_segments, pd.DataFrame) and not rfm_segments.empty:
+    fig_rfm = px.bar(rfm_segments, x='Segmento', y='Clientes', color='Segmento', title="Distribución de Segmentos RFM")
+    st.plotly_chart(fig_rfm, use_container_width=True)
+else:
+    st.info("No hay datos de RFM disponibles.")
 
-sample_customers = data.get("sample_customers", {})
-# Ordenar los segmentos para una visualización consistente
-sorted_segments = sorted(sample_customers.keys(), key=lambda x: segment_dist.get(x, 0), reverse=True)
+# --- Efectividad de Campañas ---
+st.subheader("📢 Efectividad de Campañas")
+campaign_dist = data.get('campaign_distribution', {})
+if campaign_dist:
+    df_campaign = pd.DataFrame(list(campaign_dist.items()), columns=['Campaña', 'Pedidos'])
+    st.bar_chart(df_campaign.set_index('Campaña'), use_container_width=True)
+else:
+    st.info("No hay datos de campañas.")
 
-for segment in sorted_segments:
-    customers = sample_customers.get(segment)
-    with st.expander(f"**{segment}** ({segment_dist.get(segment, 0)} clientes)"):
-        if customers:
-            df_sample = pd.DataFrame(customers)
-            # Formatear columnas para una mejor lectura
-            df_sample['monetary'] = df_sample['monetary'].apply(lambda x: f"${x:,.0f}")
-            st.dataframe(df_sample.rename(columns={
-                'customerId': 'ID Cliente', 'email': 'Email', 'recency': 'Recencia (días)', 
-                'frequency': 'Frecuencia', 'monetary': 'Valor Monetario (CLP)'
-            }), use_container_width=True, hide_index=True)
-        else:
-            st.write("No hay clientes de muestra para este segmento.")
+# --- Programa de Referidos ---
+st.subheader("🤝 Programa de Referidos")
+referred_pct = data.get('referred_pct', None)
+if referred_pct is not None:
+    st.metric("% Clientes Referidos", f"{referred_pct:.1f}%")
+else:
+    st.info("No hay datos de referidos.")
+
+# --- Predicción de Churn ---
+st.subheader("⚠️ Predicción de Churn (Riesgo de Abandono)")
+churn_dist = data.get('churn_distribution', {})
+if churn_dist:
+    df_churn = pd.DataFrame(list(churn_dist.items()), columns=['Nivel de Riesgo', 'Clientes'])
+    st.bar_chart(df_churn.set_index('Nivel de Riesgo'), use_container_width=True)
+else:
+    st.info("No hay datos de churn.")
+
+# Si no hay datos de segmentación relevantes, mostrar KPIs básicos de pedidos
+if not any([
+    specialties,
+    region_dist,
+    cohort_dist,
+    ticket_dist,
+    isinstance(rfm_segments, pd.DataFrame) and not rfm_segments.empty,
+    campaign_dist,
+    referred_pct,
+    churn_dist
+]):
+    st.subheader(f"KPIs básicos de pedidos entre el {start_date_obj.strftime('%d/%m/%Y')} y el {end_date_obj.strftime('%d/%m/%Y')}")
+    cols_kpi = st.columns(3)
+    with cols_kpi[0]:
+        st.metric("Total de Pedidos", f"{data.get('total_pedidos', 0):,}")
+    with cols_kpi[1]:
+        st.metric("Monto Total Vendido", f"${data.get('monto_total', 0):,.0f}")
+    with cols_kpi[2]:
+        st.metric("Calificación Promedio", f"{data.get('calificacion_promedio', 0):.2f}")
+    st.markdown("### Pedidos por Estado")
+    st.write(data.get('pedidos_por_estado', {}))
+    st.markdown("### Top 5 Clientes por Pedidos")
+    pedidos_por_cliente = data.get('pedidos_por_cliente', {})
+    if isinstance(pedidos_por_cliente, dict):
+        top_clientes = sorted(pedidos_por_cliente.items(), key=lambda x: x[1], reverse=True)[:5]
+        st.write(top_clientes)
+    else:
+        st.write(pedidos_por_cliente)
+    st.markdown("### Métodos de Pago")
+    st.write(data.get('metodos_pago', {}))
+    st.markdown("### Pedidos por Comuna")
+    st.write(data.get('pedidos_por_comuna', {}))
 
 # --- Explicación de los Segmentos ---
 st.markdown("---")

@@ -62,3 +62,12 @@ def get_kpis_segmentation_endpoint(start_date: str = None, end_date: str = None)
     """
     range_start, range_end = get_date_range(start_date, end_date)
     return firestore_service.get_rfm_segmentation(range_start, range_end)
+
+# --- Endpoint para KPIs básicos de la colección 'pedidos' ---
+@router.get("/basic-pedidos", summary="Obtener KPIs básicos de la colección 'pedidos'")
+def get_basic_pedidos_kpis_endpoint(start_date: str = None, end_date: str = None):
+    """
+    Endpoint para KPIs básicos de la colección 'pedidos'.
+    """
+    range_start, range_end = get_date_range(start_date, end_date)
+    return firestore_service.get_basic_pedidos_kpis(range_start, range_end)

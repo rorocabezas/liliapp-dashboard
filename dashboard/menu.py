@@ -82,6 +82,7 @@ def render_menu():
         #st.page_link("pages/Mapeo_de_ordenes.py", label="Mapeo de Ordenes", icon="🔄")
         #st.page_link("pages/Mapeo_Jumpseller_a_Usuario.py", label="Mapeo Jumpseller a Usuario", icon="🗺️")
         st.markdown("---")
+        st.page_link("pages/auditoria_pedidos.py", label="Auditoría de Pedidos", icon="🔬")
         #st.page_link("pages/auditoria.py", label="Auditoría de Datos", icon="🔬")
         #st.page_link("pages/salud_firestore.py", label="Salud de Firestore", icon="🩺")
         
@@ -92,7 +93,7 @@ def render_menu():
         #st.markdown("---")      
 
         #st.subheader("Catálogo Jumpseller")
-        #st.page_link("pages/catalogo_jumpseller.py", label="Explorador de API", icon="📦")
+        st.page_link("pages/catalogo_jumpseller.py", label="Explorador de API", icon="📦")
        
         # --- Llamada a la función de filtros ---
         _render_global_filters()

@@ -1,9 +1,11 @@
 # backend/api/v1/endpoints/auth.py
+
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from firebase_admin import auth
 from backend.services import firestore_service
 import firebase_admin
+from backend.core.config import settings
 
 
 
@@ -36,18 +38,18 @@ async def login_for_access_token(user_credentials: UserLogin):
     try:
         # Primero verificamos la contraseña usando la API REST de Firebase
         import requests
-        firebase_api_key = settings.FIREBASE_WEB_API_KEY  # Debes agregar esta configuración
+        firebase_api_key = settings.FIREBASE_WEB_API_KEY  # Usar settings correctamente
         auth_url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={firebase_api_key}"
-        
+
         auth_response = requests.post(auth_url, json={
             "email": email,
             "password": password,
             "returnSecureToken": True
         })
-        
+
         if auth_response.status_code != 200:
             raise HTTPException(status_code=401, detail="Credenciales inválidas.")
-            
+
         # Si llegamos aquí, la autenticación fue exitosa
         # Ahora obtenemos el usuario completo y creamos el token personalizado
         user = auth.get_user_by_email(email)
@@ -57,10 +59,10 @@ async def login_for_access_token(user_credentials: UserLogin):
 
         # Devolvemos el token al frontend
         return {
-            "custom_token": custom_token.decode('utf-8'), 
+            "custom_token": custom_token.decode('utf-8'),
             "uid": user.uid,
             "role": user_role,
-            "email": user.email 
+            "email": user.email
         }
     except Exception as e:
         raise HTTPException(
